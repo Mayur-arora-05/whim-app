@@ -26,6 +26,11 @@ App Store Connect. Auth is an App Store Connect API key.
    The *archive* may still show `development` + `get-task-allow=true` — that's fine,
    the app-store export below re-signs to a distribution/production profile.
 
+3. **`403 REQUIRED_AGREEMENTS_MISSING_OR_EXPIRED` on export** = Apple published new
+   terms. The account holder accepts them in App Store Connect → Business (all
+   agreements must show Active); the archive stays valid, so just re-run step 4.
+   It can take a few minutes after accepting before uploads go through.
+
 ## Steps (SCRATCH = a temp dir)
 
 ```bash
@@ -84,4 +89,4 @@ The dSYM "Upload Symbols Failed" warnings for Mapbox/hermes frameworks are benig
 | 10 | Jul 27 | "Your spots" space; saved-spots surfacing fix; audit fixes (cross-user cache clear, push rebrand, save-vibe pin) |
 | 11 | Jul 28 | Catalogue 13→48 cities / 2,160 spots (seed-city engine); European expansion for beta |
 | 12 | Sep 27 | +15 Batch-4 cities in picker (63 total); smart route (hours as constraints + best start + 2-opt, ~39% shorter days); Japan transit shows instant estimates; Open in Maps multi-stop fix; Near Me two-phase load (list in ~6 s, tips fill in place); dashed leg connector. No native changes (no prebuild) |
-| 13 | Oct 3 | Product analytics (route_viewed, open_in_maps, share, room funnel); guide discovery + saving synced to the account (device saves from build 12 move over on first load); creator guide pages; migration 0023 `saved_guides` (already applied). No native changes (no prebuild) |
+| 13 | Oct 3 | Product analytics (route_viewed, open_in_maps, share, room funnel); guide discovery + saving synced to the account (device saves from build 12 move over on first load); creator guide pages; migration 0023 `saved_guides` (already applied); App Store 1.2 pass (language filter, honest report/block, creator-page block, privacy policy update); handle/publish errors shown in-sheet; heart icon fix. Uploaded Oct 3 17:01. No native changes (no prebuild) |

@@ -8,6 +8,7 @@ items get resolved — this file is a working log, not a spec.
 
 ## TL;DR
 
+- **Build 13 uploaded to TestFlight 2026-10-03** (from `main` @ PR #6 merge): saved guides sync to the account, guide discovery + creator pages, analytics, App Store 1.2 moderation pass. Next: three-person Room test (WHI-5) and device QA (WHI-11) on build 13.
 - Every screen loads, no crashes, no app-log errors or warnings.
 - **Transit "est." in Japan = Google coverage gap, not a bug** (confirmed §3.1).
   Japan legs now skip Google and show the estimate instantly.
