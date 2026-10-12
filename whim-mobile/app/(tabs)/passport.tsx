@@ -94,7 +94,7 @@ export default function Passport() {
               {stamps.map((s) => (
                 <View key={s.spotId} style={{ width: '31.5%' }}>
                   <View className="aspect-square overflow-hidden rounded-2xl" style={{ backgroundColor: s.tone }}>
-                    <SpotImage uri={s.photo} width={130} />
+                    <SpotImage uri={s.photo} placeId={s.placeId} width={130} />
                     <View className="absolute right-1.5 top-1.5 h-6 w-6 items-center justify-center rounded-full bg-accent">
                       <Icon name="check" size={13} color="#fff" strokeWidth={3} />
                     </View>

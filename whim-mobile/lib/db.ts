@@ -25,19 +25,23 @@ function rowToSpot(row: any): Spot {
   };
 }
 
-/** A real photo from this city+vibe's deck, for the Home featured card. */
-export async function fetchCoverPhoto(city: string, vibe: VibeId): Promise<string | null> {
+/** A real spot from this city+vibe's deck, for the Home featured card. Prefers
+ * a spot with a Google place (its photo is of that exact place); only 13 of 63
+ * cities have stock photos, and those were Pexels first-search-results that are
+ * sometimes of another city. */
+export async function fetchCoverPhoto(city: string, vibe: VibeId): Promise<{ photo: string | null; placeId?: string } | null> {
   const { data, error } = await supabase
     .from('spots')
-    .select('photo')
+    .select('photo, place_id')
     .eq('city', city)
     .contains('vibes', [vibe])
-    .not('photo', 'is', null)
-    .neq('photo', '')
+    .order('place_id', { ascending: true, nullsFirst: false })
     .limit(1);
   if (error) throw error;
-  const photo = data?.[0]?.photo ?? null;
-  return photo && photo.startsWith('http') ? photo : null;
+  const row = data?.[0];
+  if (!row) return null;
+  const photo = row.photo && row.photo.startsWith('http') ? row.photo : null;
+  return { photo, placeId: row.place_id ?? undefined };
 }
 
 /** Phase 1 → 2: the curated deck for a (city, vibe), straight from the DB. */
@@ -951,6 +955,7 @@ export interface CheckinItem {
   city: string;
   tone: string;
   photo: string;
+  placeId?: string;
 }
 
 export async function fetchCheckins(): Promise<CheckinItem[]> {
@@ -969,6 +974,7 @@ export async function fetchCheckins(): Promise<CheckinItem[]> {
       city: r.city ?? r.spots.city ?? '',
       tone: r.spots.tone ?? '#E7DCCB',
       photo: r.spots.photo ?? '',
+      placeId: r.spots.place_id ?? undefined,
     }));
 }
 

@@ -112,7 +112,7 @@ export default function MicroDiscoveryModal() {
                 return (
                   <View key={a.id} className="w-[164px] overflow-hidden rounded-2xl border border-[#EFEAE2] bg-white">
                     <View className="h-[88px] overflow-hidden" style={{ backgroundColor: a.tone }}>
-                      <SpotImage uri={a.photo} width={130} />
+                      <SpotImage uri={a.photo} placeId={a.placeId} width={130} />
                     </View>
                     <View className="px-3 pb-3 pt-2.5">
                       <Text className="text-[13.5px] font-semibold leading-5 text-ink">{a.title}</Text>
