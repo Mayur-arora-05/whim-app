@@ -8,8 +8,10 @@
 //              are never touched).
 //   --nearby   every place with no sub-places gets 3–5 via seed-nearby
 //              (hand-curated sub-places are kept).
+//   --backfill hand-curated sub-places get a Google place_id (photo in the app);
+//              nothing else about them changes.
 //
-// USAGE: node --env-file=.env.seed scripts/seed-catalogue.mjs --decks|--nearby [--dry] [--city=Oslo]
+// USAGE: node --env-file=.env.seed scripts/seed-catalogue.mjs --decks|--nearby|--backfill [--dry] [--city=Oslo]
 // Back up first: node --env-file=.env.seed scripts/backup-spots.mjs
 
 import fs from 'node:fs';
@@ -24,6 +26,9 @@ if (!SUPABASE_URL || !SERVICE_KEY) {
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry');
 const ONLY = args.find((a) => a.startsWith('--city='))?.slice(7);
+// second pass for small cities: widen the search and relax the review bar
+const RADIUS = Number(args.find((a) => a.startsWith('--radius='))?.slice(9)) || undefined;
+const MIN_RATINGS = Number(args.find((a) => a.startsWith('--min-ratings='))?.slice(14)) || undefined;
 const VIBES = ['classics', 'matcha', 'nature', 'nightlife'];
 const MIN = 10;
 const TARGET = 12;
@@ -65,9 +70,9 @@ async function decks() {
       if (have >= MIN) continue;
       const need = TARGET - have;
       // small cities rarely have 60+ reviews on every café — relax the bar there
-      const minRatings = deck.length < 35 ? 25 : 60;
+      const minRatings = MIN_RATINGS ?? (deck.length < 35 ? 25 : 60);
       if (DRY) { console.log(`plan  ${c.name.padEnd(14)} ${v.padEnd(9)} ${have} → +${need}`); continue; }
-      const r = await call('seed-city', { city: c.name, lat: c.lat, lng: c.lng, vibes: [v], onlyNew: true, perVibe: need, minRatings });
+      const r = await call('seed-city', { city: c.name, lat: c.lat, lng: c.lng, vibes: [v], onlyNew: true, perVibe: need, minRatings, ...(RADIUS ? { radius: RADIUS } : {}) });
       console.log(`${c.name.padEnd(14)} ${v.padEnd(9)} ${have} → +${r.inserted ?? 0}`, r.error ?? r.note ?? r.raw ?? '', r.enrichErr?.length ? r.enrichErr : '');
     }
   }
@@ -93,6 +98,23 @@ async function nearby() {
   console.log(`done: ${updated} places got sub-places, ${empty} had too little nearby`);
 }
 
+async function backfill() {
+  const rows = await allSpots();
+  const names = new Set(CITIES.map((c) => c.name));
+  const todo = rows.filter((r) => names.has(r.city) && (r.nearby ?? []).some((n) => !n.placeId));
+  const items = todo.reduce((t, r) => t + r.nearby.filter((n) => !n.placeId).length, 0);
+  console.log(`${todo.length} places with ${items} sub-places lacking a place_id${DRY ? ' (dry run)' : ''}`);
+  if (DRY) return;
+  let matched = 0, missed = 0;
+  for (let i = 0; i < todo.length; i += 40) {
+    const r = await call('seed-nearby', { ids: todo.slice(i, i + 40).map((x) => x.id), limit: 40, backfill: true });
+    matched += r.matched ?? 0; missed += r.missed ?? 0;
+    console.log(`batch ${i / 40 + 1}/${Math.ceil(todo.length / 40)}: matched ${r.matched ?? 0}, missed ${r.missed ?? 0}`, r.errors?.length ? r.errors : '', r.error ?? r.raw ?? '');
+  }
+  console.log(`done: ${matched} matched, ${missed} not found`);
+}
+
 if (args.includes('--decks')) await decks();
 else if (args.includes('--nearby')) await nearby();
-else console.log('pass --decks or --nearby (optionally --dry, --city=Name)');
+else if (args.includes('--backfill')) await backfill();
+else console.log('pass --decks, --nearby or --backfill (optionally --dry, --city=Name)');

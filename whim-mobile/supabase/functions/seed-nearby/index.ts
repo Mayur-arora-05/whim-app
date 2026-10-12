@@ -12,6 +12,12 @@
 // Only spots with an empty `nearby` are touched unless overwrite is true, so
 // hand-curated sub-places (Japan, NYC, SF…) are kept. Re-runnable.
 //
+// { backfill: true } instead attaches a place_id to existing sub-places that
+// lack one (hand-curated ones), so the app can show their photo. It only adds
+// that field. Uses Text Search with an IDs-only field mask (no-cost SKU),
+// restricted to a small box around the sub-place, so a same-named place in
+// another city can't match.
+//
 // Secret: GOOGLE_PLACES_API_KEY
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -37,6 +43,15 @@ const NOT_A_DETOUR = /gas_station|charging|^car_|parking|_station$|transit|airpo
 const TONES = ['#E9D7CE', '#D7DEE4', '#DCE3D8', '#DED7E0', '#E7DCCB', '#DDE2D6', '#E4DACF', '#D9DFE6'];
 const FIELD_MASK = 'places.id,places.displayName,places.primaryType,places.primaryTypeDisplayName,places.location,places.businessStatus';
 
+// Google answers 429 when we outrun its per-minute quota: back off and retry.
+async function placesFetch(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 || attempt === 4) return res;
+    await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+  }
+}
+
 function distMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 6371000, toRad = Math.PI / 180;
   const dLat = (bLat - aLat) * toRad, dLng = (bLng - aLng) * toRad;
@@ -46,7 +61,7 @@ function distMeters(aLat: number, aLng: number, bLat: number, bLng: number): num
 
 async function searchNearby(lat: number, lng: number, radius: number, key: string): Promise<any[]> {
   const call = (types: string[]) =>
-    fetch('https://places.googleapis.com/v1/places:searchNearby', {
+    placesFetch('https://places.googleapis.com/v1/places:searchNearby', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': FIELD_MASK },
       body: JSON.stringify({
@@ -61,6 +76,21 @@ async function searchNearby(lat: number, lng: number, radius: number, key: strin
   if (res.status === 400) res = await call(TYPES_CORE);
   if (!res.ok) throw new Error(`places ${res.status}`);
   return (await res.json()).places ?? [];
+}
+
+async function findPlaceId(title: string, lat: number, lng: number, halfKm: number, key: string): Promise<string | null> {
+  const dLat = halfKm / 111, dLng = halfKm / (111 * Math.cos((lat * Math.PI) / 180));
+  const res = await placesFetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.id' },
+    body: JSON.stringify({
+      textQuery: title,
+      maxResultCount: 1,
+      locationRestriction: { rectangle: { low: { latitude: lat - dLat, longitude: lng - dLng }, high: { latitude: lat + dLat, longitude: lng + dLng } } },
+    }),
+  });
+  if (!res.ok) throw new Error(`places ${res.status}`);
+  return (await res.json()).places?.[0]?.id ?? null;
 }
 
 type Anchor = { id: string; place_id: string | null; title: string; lat: number; lng: number };
@@ -103,11 +133,40 @@ Deno.serve(async (req) => {
   if (req.headers.get('x-seed-secret') !== Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
     return new Response('forbidden', { status: 403 });
 
-  const { city, ids, limit = 40, perSpot = 4, radius = 650, overwrite = false } = await req.json();
+  const { city, ids, limit = 40, perSpot = 4, radius = 650, overwrite = false, backfill = false } = await req.json();
   if (!city && !(Array.isArray(ids) && ids.length)) return new Response('city or ids required', { status: 400 });
 
   const key = Deno.env.get('GOOGLE_PLACES_API_KEY')!;
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+
+  if (backfill) {
+    let bq = admin.from('spots').select('id, lat, lng, nearby');
+    bq = ids?.length ? bq.in('id', ids) : bq.eq('city', city);
+    const { data: rows, error: bErr } = await bq.order('id').limit(Math.min(limit, 80));
+    if (bErr) return new Response(JSON.stringify({ error: bErr.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    let rowsUpdated = 0, matched = 0, missed = 0;
+    const errs: string[] = [];
+    const queue = [...(rows ?? [])];
+    await Promise.all(Array.from({ length: 3 }, async () => {
+      for (let r = queue.shift(); r; r = queue.shift()) {
+        const items = (r.nearby ?? []) as any[];
+        let changed = false;
+        for (const n of items) {
+          if (n.placeId) continue;
+          const lat = n.lat ?? r.lat, lng = n.lng ?? r.lng;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) { missed++; continue; }
+          try {
+            const id = await findPlaceId(n.title, lat, lng, n.lat != null ? 0.4 : 1.2, key);
+            if (id) { n.placeId = id; matched++; changed = true; } else missed++;
+          } catch (e) { errs.push(`${r.id}/${n.id}: ${String(e).slice(0, 60)}`); }
+        }
+        if (!changed) continue;
+        const { error: upErr } = await admin.from('spots').update({ nearby: items }).eq('id', r.id);
+        if (upErr) errs.push(`${r.id}: ${upErr.message}`); else rowsUpdated++;
+      }
+    }));
+    return new Response(JSON.stringify({ backfill: true, processed: rows?.length ?? 0, rowsUpdated, matched, missed, errors: errs.slice(0, 5) }), { headers: { 'Content-Type': 'application/json' } });
+  }
 
   let q = admin.from('spots').select('id, place_id, title, lat, lng').not('lat', 'is', null).not('lng', 'is', null);
   q = ids?.length ? q.in('id', ids) : q.eq('city', city);
@@ -118,8 +177,8 @@ Deno.serve(async (req) => {
   let updated = 0, empty = 0;
   const errors: string[] = [];
   const work = [...(anchors ?? [])] as Anchor[];
-  // small pool: steady on Google's QPS, finishes well inside the function timeout
-  await Promise.all(Array.from({ length: 6 }, async () => {
+  // small pool: stays under Google's per-minute quota, finishes inside the function timeout
+  await Promise.all(Array.from({ length: 3 }, async () => {
     for (let a = work.shift(); a; a = work.shift()) {
       try {
         const nearby = pick(a, await searchNearby(a.lat, a.lng, radius, key), perSpot, radius);
