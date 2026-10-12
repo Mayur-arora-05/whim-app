@@ -104,7 +104,7 @@ export default function Hitlist() {
               >
                 <View className="h-1.5 w-1.5 rounded-full bg-accent" />
                 <View className="h-9 w-9 overflow-hidden rounded-[9px]" style={{ backgroundColor: a.tone }}>
-                  <SpotImage uri={a.photo} width={60} />
+                  <SpotImage uri={a.photo} placeId={a.placeId} width={60} />
                 </View>
                 <View className="flex-1">
                   <Text className="text-[14px] font-semibold text-ink">{a.title}</Text>
