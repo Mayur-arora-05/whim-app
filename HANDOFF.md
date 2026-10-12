@@ -122,6 +122,26 @@ node --env-file=.env.seed scripts/mirror-photos.mjs  # ALWAYS after seed (seed r
   harmless (micros show minutes, not pins); Places API can resolve them
   in-app later.
 
+### Catalogue balance (every city comparable) — added 2026-10-12
+Most cities come from the `seed-city` Edge Function (Google + Claude), not the
+curated JSON. Keep every picker city at ≥10 places per vibe (target 12) and
+3–5 sub-places per place. Back up first, then:
+```bash
+cd whim-mobile
+node --env-file=.env.seed scripts/backup-spots.mjs
+node --env-file=.env.seed scripts/seed-catalogue.mjs --decks --dry   # plan
+node --env-file=.env.seed scripts/seed-catalogue.mjs --decks         # top up thin decks (adds new places only)
+node --env-file=.env.seed scripts/seed-catalogue.mjs --nearby        # sub-places for places that have none
+node --env-file=.env.seed scripts/seed-catalogue.mjs --backfill      # place_id on hand-curated sub-places (photos)
+```
+- Order matters: a plain (non-top-up) `seed-city` run **overwrites** existing
+  rows and resets their `nearby` to `[]`. Use top-up mode (the runner does).
+- Small cities: re-run `--decks --city=X --radius=20000 --min-ratings=20`.
+- Run one pass at a time — parallel passes hit Google 429s.
+- State 2026-10-12: 3,128 places, 42–74 per city (median 48), every
+  city×vibe ≥10 except Darmstadt classics 7 and Split nature 8 (Google has
+  no more); 12,321 sub-places, 3 remote nature reserves have none.
+
 ### App build/run
 - JS-only change: Metro reload (`npm run start`, sim app reloads).
 - Native change (new module, icon, splash, plugins): `npx expo prebuild

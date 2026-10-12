@@ -91,7 +91,7 @@ async function nearby() {
   }
   let updated = 0, empty = 0;
   for (let i = 0; i < todo.length; i += 40) {
-    const r = await call('seed-nearby', { ids: todo.slice(i, i + 40).map((x) => x.id), limit: 40 });
+    const r = await call('seed-nearby', { ids: todo.slice(i, i + 40).map((x) => x.id), limit: 40, ...(RADIUS ? { radius: RADIUS } : {}) });
     updated += r.updated ?? 0; empty += r.empty ?? 0;
     console.log(`batch ${i / 40 + 1}/${Math.ceil(todo.length / 40)}: +${r.updated ?? 0} (empty ${r.empty ?? 0})`, r.errors?.length ? r.errors : '', r.error ?? r.raw ?? '');
   }
