@@ -193,7 +193,7 @@ export default function RoomLobby() {
           {matches.map((m) => (
             <View key={m.spot.id} className="mb-3 flex-row items-center gap-3.5 rounded-[20px] bg-white p-3.5" style={SHADOWS.soft}>
               <View className="h-[56px] w-[56px] overflow-hidden rounded-[14px]" style={{ backgroundColor: m.spot.tone }}>
-                <SpotImage uri={m.spot.photo} width={130} />
+                <SpotImage uri={m.spot.photo} placeId={m.spot.placeId} width={130} />
               </View>
               <View className="flex-1">
                 <Text className="font-serif text-[17px] text-ink">{m.spot.title}</Text>
