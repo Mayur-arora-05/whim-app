@@ -345,6 +345,6 @@ The phased plan is in [`ROADMAP.md`](ROADMAP.md).
 
 **BeWhim ✦ swipe. save. go.**
 
-© 2026 Pranjal Rai. All rights reserved.
+© 2026 Pranjal Rai, Mayur. All rights reserved.
 
 </div>
