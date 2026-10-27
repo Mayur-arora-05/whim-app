@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { track } from './analytics';
+import { assertClean } from './moderation';
 import type { BucketAnchor, MicroActivity, Spot, VibeId } from './types';
 
 // Thin data-access layer over Supabase. All reads/writes are scoped to the
@@ -24,19 +25,23 @@ function rowToSpot(row: any): Spot {
   };
 }
 
-/** A real photo from this city+vibe's deck, for the Home featured card. */
-export async function fetchCoverPhoto(city: string, vibe: VibeId): Promise<string | null> {
+/** A real spot from this city+vibe's deck, for the Home featured card. Prefers
+ * a spot with a Google place (its photo is of that exact place); only 13 of 63
+ * cities have stock photos, and those were Pexels first-search-results that are
+ * sometimes of another city. */
+export async function fetchCoverPhoto(city: string, vibe: VibeId): Promise<{ photo: string | null; placeId?: string } | null> {
   const { data, error } = await supabase
     .from('spots')
-    .select('photo')
+    .select('photo, place_id')
     .eq('city', city)
     .contains('vibes', [vibe])
-    .not('photo', 'is', null)
-    .neq('photo', '')
+    .order('place_id', { ascending: true, nullsFirst: false })
     .limit(1);
   if (error) throw error;
-  const photo = data?.[0]?.photo ?? null;
-  return photo && photo.startsWith('http') ? photo : null;
+  const row = data?.[0];
+  if (!row) return null;
+  const photo = row.photo && row.photo.startsWith('http') ? row.photo : null;
+  return { photo, placeId: row.place_id ?? undefined };
 }
 
 /** Phase 1 → 2: the curated deck for a (city, vibe), straight from the DB. */
@@ -78,6 +83,7 @@ export async function saveSpot(
   microActivityIds: string[],
   city: string,
   vibe: VibeId | null,
+  via: 'swipe' | 'super' = 'swipe',
 ): Promise<void> {
   const { error } = await supabase
     .from('saved_spots')
@@ -86,7 +92,7 @@ export async function saveSpot(
       { onConflict: 'user_id,spot_id' },
     );
   if (error) throw error;
-  track('spot_saved', { city, vibe });
+  track('spot_saved', { city, vibe, via });
 }
 
 export async function removeSavedSpot(spotId: string): Promise<void> {
@@ -136,19 +142,24 @@ function rowToRoom(r: any): Room {
 }
 
 export async function createRoom(city: string, vibe: VibeId, name?: string): Promise<Room> {
+  assertClean(name);
   const { data, error } = await supabase.rpc('create_room', {
     p_city: city,
     p_vibe: vibe,
     p_name: name ?? null,
   });
   if (error) throw error;
-  return rowToRoom(data);
+  const room = rowToRoom(data);
+  track('room_created', { room_id: room.id, city: room.city, vibe: room.vibe });
+  return room;
 }
 
 export async function joinRoom(code: string): Promise<Room> {
   const { data, error } = await supabase.rpc('join_room', { p_code: code });
   if (error) throw error;
-  return rowToRoom(data);
+  const room = rowToRoom(data);
+  track('room_joined', { room_id: room.id, city: room.city, vibe: room.vibe });
+  return room;
 }
 
 export async function fetchRoom(roomId: string): Promise<Room> {
@@ -401,6 +412,7 @@ export async function publishCustomTrip(input: {
   const stops = input.stops.slice(0, 30);
   if (stops.length === 0) throw new Error('Add at least one location.');
   if (!input.title.trim()) throw new Error('Give your trip a title.');
+  assertClean(input.title, input.note);
   const { data: prof } = await supabase.from('profiles').select('display_name').eq('id', user.id).maybeSingle();
   const { data, error } = await supabase
     .from('published_itineraries')
@@ -437,6 +449,7 @@ export async function publishItinerary(input: {
   if (!user) throw new Error('Not signed in');
   const ids = input.spotIds.slice(0, 30);
   if (ids.length === 0) throw new Error('Add at least one spot before publishing.');
+  assertClean(input.title, input.note);
   // snapshot the author's display name — profiles are read-own-only, so a feed
   // can't join to it; this is how "by <name>" renders for other viewers.
   const { data: prof } = await supabase.from('profiles').select('display_name').eq('id', user.id).maybeSingle();
@@ -582,6 +595,62 @@ export async function promoteSpot(placeId: string): Promise<void> {
   }
 }
 
+/** One published_itineraries row → feed card (community feed, creator page, saved shelf). */
+function itineraryFeedItem(row: any): FeedItem {
+  return {
+    kind: 'itinerary', id: row.id, title: row.title, authorId: row.author,
+    authorName: row.author_name, city: row.city, vibe: row.vibe,
+    stopCount: row.stop_count ?? 0, cover: row.cover, createdAt: row.created_at,
+  };
+}
+
+/** For mixed feeds: a failed block-list read shouldn't take the whole screen down. */
+function blockedUserIdsOrNone(): Promise<string[]> {
+  return fetchBlockedUserIds().catch(() => [] as string[]);
+}
+
+/** Creator storefront: approved guides only; blocked creators return no content.
+ * Fetch one extra row to decide whether another page exists. */
+export async function fetchCreatorGuides(authorId: string, page = 0): Promise<{ items: FeedItem[]; nextPage: number | null }> {
+  // Block check on the first page only (a blocked creator gets no next page).
+  // Fails closed: this page is one person's content, so an error must not show it.
+  if (page === 0 && (await fetchBlockedUserIds()).includes(authorId)) return { items: [], nextPage: null };
+  const { data, error } = await supabase.from('published_itineraries').select('*')
+    .eq('status', 'approved').eq('author', authorId)
+    .order('created_at', { ascending: false }).order('id', { ascending: false })
+    .range(page * 20, page * 20 + 20);
+  if (error) throw error;
+  const items = (data ?? []).slice(0, 20).map(itineraryFeedItem);
+  return { items, nextPage: (data?.length ?? 0) > 20 ? page + 1 : null };
+}
+
+export async function fetchCloudSavedGuideIds(): Promise<string[]> {
+  const { data, error } = await supabase.from('saved_guides').select('guide_id').order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(row => row.guide_id);
+}
+
+/** Idempotent save/remove; ownership comes exclusively from auth.uid() + RLS. */
+export async function setCloudGuideSaved(guideId: string, saved: boolean): Promise<void> {
+  const { error } = await supabase.rpc('set_saved_guide', { p_guide_id: guideId, p_saved: saved });
+  if (error) throw error;
+}
+
+/** Resolve the saved shelf by ID, including guides older than the latest feed.
+ * Approved status and blocked authors use the same rules as discovery. */
+export async function fetchSavedGuideFeed(ids: string[]): Promise<FeedItem[]> {
+  if (!ids.length) return [];
+  const blocked = new Set(await blockedUserIdsOrNone());
+  const rows = [];
+  for (let start = 0; start < ids.length; start += 50) {
+    const { data, error } = await supabase.from('published_itineraries').select('*').eq('status', 'approved').in('id', ids.slice(start, start + 50));
+    if (error) throw error;
+    rows.push(...(data ?? []));
+  }
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return rows.filter(row => !blocked.has(row.author)).map(itineraryFeedItem).sort((a, b) => (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0));
+}
+
 /** Everything the community is publishing — trips + spots — newest first,
  *  with blocked authors filtered out. */
 export async function fetchCommunityFeed(): Promise<FeedItem[]> {
@@ -598,24 +667,15 @@ export async function fetchCommunityFeed(): Promise<FeedItem[]> {
       .eq('status', 'approved')
       .order('created_at', { ascending: false })
       .limit(60),
-    fetchBlockedUserIds().catch(() => [] as string[]),
+    blockedUserIdsOrNone(),
   ]);
+  if (itins.error) throw itins.error;
+  if (spots.error) throw spots.error;
   const blockedSet = new Set(blocked);
   const items: FeedItem[] = [];
   for (const r of itins.data ?? []) {
     if (blockedSet.has(r.author)) continue;
-    items.push({
-      kind: 'itinerary',
-      id: r.id,
-      title: r.title,
-      authorId: r.author,
-      authorName: r.author_name,
-      city: r.city,
-      vibe: r.vibe,
-      stopCount: r.stop_count ?? 0,
-      cover: r.cover,
-      createdAt: r.created_at,
-    });
+    items.push(itineraryFeedItem(r));
   }
   for (const r of spots.data ?? []) {
     if (blockedSet.has(r.submitted_by)) continue;
@@ -663,8 +723,18 @@ export async function leaveRoom(roomId: string): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) throw new Error('Not signed in');
-  const { error } = await supabase.from('room_members').delete().eq('room_id', roomId).eq('user_id', user.id);
+  // RLS turns a delete it doesn't allow (e.g. a request that went out without
+  // the session, mid token-refresh) into "0 rows, no error" — ask for the
+  // deleted row back so a silent no-op surfaces as a failure (toast) instead of
+  // the app acting as if you left while you're still a member.
+  const { data, error } = await supabase
+    .from('room_members')
+    .delete()
+    .eq('room_id', roomId)
+    .eq('user_id', user.id)
+    .select('user_id');
   if (error) throw error;
+  if (!data?.length) throw new Error('Leave had no effect — nothing was deleted');
 }
 
 // ── Profile ──────────────────────────────────────────────────────────────
@@ -681,6 +751,7 @@ export async function fetchProfile(): Promise<Profile | null> {
 }
 
 export async function updateDisplayName(name: string): Promise<void> {
+  assertClean(name);
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -714,6 +785,7 @@ const rowToBadge = (r: any): Badge => ({
 export async function setUsername(username: string): Promise<void> {
   const u = username.trim().toLowerCase();
   if (!/^[a-z0-9_]{3,20}$/.test(u)) throw new Error('Handles are 3–20 characters: letters, numbers or _.');
+  assertClean(u.replace(/_/g, ' '));
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -883,6 +955,7 @@ export interface CheckinItem {
   city: string;
   tone: string;
   photo: string;
+  placeId?: string;
 }
 
 export async function fetchCheckins(): Promise<CheckinItem[]> {
@@ -901,6 +974,7 @@ export async function fetchCheckins(): Promise<CheckinItem[]> {
       city: r.city ?? r.spots.city ?? '',
       tone: r.spots.tone ?? '#E7DCCB',
       photo: r.spots.photo ?? '',
+      placeId: r.spots.place_id ?? undefined,
     }));
 }
 

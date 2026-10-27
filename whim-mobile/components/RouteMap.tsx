@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import Mapbox, { Camera, CircleLayer, LineLayer, MapView, ShapeSource, SymbolLayer } from '@/lib/mapbox';
 import type { RouteStop } from '@/lib/route';
@@ -15,13 +16,16 @@ interface RouteMapProps {
 
 export default function RouteMap({ stops, height = 280 }: RouteMapProps) {
   const cameraRef = useRef<any>(null);
+  // every screen renders this map full-bleed at the top, under the status bar
+  // and floating buttons — keep pins below the Dynamic Island / back button
+  const { top: safeTop } = useSafeAreaInsets();
 
   const coords = stops.map((s) => [s.lng, s.lat] as [number, number]);
   const lngs = coords.map((c) => c[0]);
   const lats = coords.map((c) => c[1]);
 
   // Frame the route: a single stop centers + zooms; multiple stops fit the
-  // bounding box with padding (extra at the bottom so pins clear the timeline).
+  // bounding box with padding (top clears the status bar + floating buttons).
   const fitCamera = useCallback(() => {
     if (!cameraRef.current || coords.length === 0) return;
     if (coords.length === 1) {
@@ -31,10 +35,10 @@ export default function RouteMap({ stops, height = 280 }: RouteMapProps) {
     cameraRef.current.fitBounds(
       [Math.max(...lngs), Math.max(...lats)],
       [Math.min(...lngs), Math.min(...lats)],
-      [50, 40, 90, 40], // [top, right, bottom, left]
+      [safeTop + 36, 40, 44, 40], // [top, right, bottom, left]
       600,
     );
-  }, [coords, lngs, lats]);
+  }, [coords, lngs, lats, safeTop]);
 
   useEffect(() => {
     fitCamera();

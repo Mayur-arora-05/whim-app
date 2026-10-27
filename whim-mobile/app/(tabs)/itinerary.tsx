@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platfor
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import { router } from 'expo-router';
 import Icon from '@/components/Icon';
 import ShareCard from '@/components/ShareCard';
 import { scheduleTripReminder } from '@/lib/notify';
@@ -15,6 +16,9 @@ import { useWhimStore, scopedBucket } from '@/store/useWhimStore';
 import { estimateTransitMins, googleMapsDirectionsUrl, orderByProximity } from '@/lib/route';
 import { getTransit, legText, type TransitResult } from '@/lib/transit';
 import RouteMap from '@/components/RouteMap';
+import DashedRail from '@/components/DashedRail';
+import { track } from '@/lib/analytics';
+import { useRouteAnalytics } from '@/lib/useRouteAnalytics';
 
 // Phase 4 — Itinerary. Orders the saved anchors, maps them, lists them as a
 // timeline, and shows the transit connection (real line names via Google, or a
@@ -30,6 +34,9 @@ export default function ItineraryScreen() {
   const scoped = useMemo(() => scopedBucket(bucketList, city, vibe), [bucketList, city, vibe]);
   const stops = useMemo(() => orderByProximity(scoped), [scoped]);
   const byId = useMemo(() => Object.fromEntries(scoped.map((b) => [b.anchor.id, b])), [scoped]);
+
+  const hydrated = useWhimStore((s) => s.hydrated);
+  useRouteAnalytics('solo', city, vibe, stops.length, hydrated);
 
   const [legs, setLegs] = useState<Record<number, TransitResult | null>>({});
 
@@ -56,7 +63,8 @@ export default function ItineraryScreen() {
     else if (leg) label = legText(leg);
     else label = `🚇 ~${estimateTransitMins(stops[idx], stops[idx + 1])} min · est.`;
     return (
-      <View className="my-1 ml-3.5 flex-row items-center border-l-2 border-dashed border-[#D7D1C6] py-1 pl-4">
+      <View className="my-1 ml-3.5 flex-row items-center py-1 pl-4">
+        <DashedRail />
         <View className="rounded-full bg-[#EFEBE3] px-3 py-1.5">
           <Text className="text-[11.5px] font-medium text-muted">{label}</Text>
         </View>
@@ -66,7 +74,9 @@ export default function ItineraryScreen() {
 
   const openInMaps = () => {
     const url = googleMapsDirectionsUrl(stops);
-    if (url) Linking.openURL(url).catch(() => {});
+    if (url) Linking.openURL(url)
+      .then(() => track('open_in_maps', { mode: 'solo', city, vibe, stop_count: stops.length }))
+      .catch(() => toast('Couldn’t open Maps.'));
   };
 
   // ── publish this trip to the community feed ──────────────────────────────
@@ -75,14 +85,17 @@ export default function ItineraryScreen() {
   const [pubTitle, setPubTitle] = useState('');
   const [pubNote, setPubNote] = useState('');
   const [pubBusy, setPubBusy] = useState(false);
+  // shown inline: a toast would render behind the publish Modal on iOS
+  const [pubError, setPubError] = useState<string | null>(null);
 
   const doPublish = async () => {
     const title = pubTitle.trim();
     if (!title) {
-      toast('Give your trip a title.');
+      setPubError('Give your trip a title.');
       return;
     }
     setPubBusy(true);
+    setPubError(null);
     try {
       await publishItinerary({
         title,
@@ -98,7 +111,7 @@ export default function ItineraryScreen() {
       setPubNote('');
       toast('Published to the community ✦');
     } catch (e: any) {
-      toast(e?.message || 'Couldn’t publish — try again.');
+      setPubError(e?.message || 'Couldn’t publish — try again.');
     } finally {
       setPubBusy(false);
     }
@@ -109,6 +122,7 @@ export default function ItineraryScreen() {
     try {
       const uri = await captureRef(shareRef, { format: 'png', quality: 1, result: 'tmpfile' });
       if (await Sharing.isAvailableAsync()) {
+        track('plan_share_requested', { mode: 'solo', city, vibe, stop_count: stops.length });
         await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your BeWhim day' });
       }
     } catch (e) {
@@ -146,6 +160,25 @@ export default function ItineraryScreen() {
         <Text className="font-serif text-2xl text-ink">Your optimised day</Text>
         <Text className="mt-1 text-[13px] text-muted">{stops.length} stops · timed by opening hours & transit</Text>
 
+        {stops.length === 0 && (
+          <View className="mt-6 items-center rounded-[20px] border border-dashed border-ink/15 px-6 py-8">
+            <Text className="text-center font-serif text-[19px] text-ink">
+              No {VIBE_LABEL[vibe]} spots saved in {city} yet
+            </Text>
+            <Text className="mt-2 text-center text-[13.5px] leading-5 text-muted">
+              Swipe right on a few places and BeWhim sequences them into a day — timed by opening hours, with transit between stops.
+            </Text>
+            <Pressable
+              onPress={() => router.navigate('/')}
+              style={press()}
+              className="mt-5 h-[48px] flex-row items-center justify-center gap-2 rounded-full bg-ink px-6"
+            >
+              <Text className="text-[15px] font-semibold text-white">Find spots to save</Text>
+              <Icon name="arrowRight" size={15} color="#fff" strokeWidth={2.2} />
+            </Pressable>
+          </View>
+        )}
+
         {stops.length > 0 && (
           <View className="mt-3">
             <View className="flex-row gap-2.5">
@@ -178,12 +211,9 @@ export default function ItineraryScreen() {
             >
               <Text className="text-[15px] font-semibold text-white">Publish this trip ✦</Text>
             </Pressable>
-            <Text className="mt-1.5 text-center text-[11.5px] text-muted">
+            <Text className="mb-5 mt-1.5 text-center text-[11.5px] text-muted">
               Share your route with the BeWhim community
             </Text>
-            <Pressable onPress={confirmClear} className="mb-5 mt-3 items-center py-1">
-              <Text className="text-[13px] font-semibold text-[#D23B2C]">Delete itinerary & start fresh</Text>
-            </Pressable>
           </View>
         )}
 
@@ -233,6 +263,13 @@ export default function ItineraryScreen() {
             </View>
           );
         })}
+
+        {/* destructive action lives below the plan, away from Publish */}
+        {stops.length > 0 && (
+          <Pressable onPress={confirmClear} className="mt-8 items-center py-2">
+            <Text className="text-[13px] font-semibold text-[#D23B2C]">Delete itinerary & start fresh</Text>
+          </Pressable>
+        )}
       </ScrollView>
 
 
@@ -258,7 +295,10 @@ export default function ItineraryScreen() {
 
             <TextInput
               value={pubTitle}
-              onChangeText={setPubTitle}
+              onChangeText={(t) => {
+                setPubTitle(t);
+                setPubError(null);
+              }}
               placeholder={`e.g. “${city} in a day”`}
               placeholderTextColor="#B6B1A9"
               maxLength={80}
@@ -266,7 +306,10 @@ export default function ItineraryScreen() {
             />
             <TextInput
               value={pubNote}
-              onChangeText={setPubNote}
+              onChangeText={(t) => {
+                setPubNote(t);
+                setPubError(null);
+              }}
               placeholder="Add a note (optional) — who it’s for, the vibe, a tip…"
               placeholderTextColor="#B6B1A9"
               maxLength={500}
@@ -274,6 +317,11 @@ export default function ItineraryScreen() {
               className="mt-3 min-h-[84px] rounded-2xl border border-ink/10 bg-white px-4 py-3.5 text-[14.5px] leading-6 text-ink"
               style={{ textAlignVertical: 'top' }}
             />
+            {pubError && (
+              <Text accessibilityRole="alert" className="mt-2 text-[13px] text-[#D23B2C]">
+                {pubError}
+              </Text>
+            )}
 
             <Pressable
               onPress={doPublish}

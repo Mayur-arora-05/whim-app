@@ -29,6 +29,7 @@ export default function BuildTrip() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PlaceResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchedFor, setSearchedFor] = useState(''); // last query that came back — drives "no matches"
   const [busy, setBusy] = useState(false);
 
   // remix: prefill from an existing trip (dropped to a flat, editable list)
@@ -49,6 +50,7 @@ export default function BuildTrip() {
             lng: s.lng,
             kind: s.kind,
             area: s.area,
+            day: s.day,
           })),
         );
       })
@@ -62,20 +64,35 @@ export default function BuildTrip() {
     if (q.length < 2) {
       setResults([]);
       setSearching(false);
+      setSearchedFor('');
       return;
     }
     setSearching(true);
+    // A bare name ("Fuglen") is too ambiguous for Places and returns nothing;
+    // scope it to the trip's city when one is set and not already typed.
+    const c = city.trim();
+    const scoped = c && !q.toLowerCase().includes(c.toLowerCase()) ? `${q} ${c}` : q;
+    // a slower, older request must not overwrite a newer one's results
+    let current = true;
     const id = setTimeout(() => {
-      searchPlaces(q)
-        .then(setResults)
+      searchPlaces(scoped)
+        .then((r) => current && setResults(r))
         .catch((e) => {
+          if (!current) return;
           setResults([]);
           if (e?.message) toast(e.message);
         })
-        .finally(() => setSearching(false));
+        .finally(() => {
+          if (!current) return;
+          setSearching(false);
+          setSearchedFor(q);
+        });
     }, 320);
-    return () => clearTimeout(id);
-  }, [query]);
+    return () => {
+      current = false;
+      clearTimeout(id);
+    };
+  }, [query, city]);
 
   const addPlace = (p: PlaceResult) => {
     if (stops.length >= 30) {
@@ -117,7 +134,7 @@ export default function BuildTrip() {
     } finally {
       setBusy(false);
     }
-  }, [title, city, note, stops]);
+  }, [title, city, note, stops, qc]);
 
   if (prefilling) {
     return (
@@ -187,6 +204,13 @@ export default function BuildTrip() {
             {searching && <ActivityIndicator size="small" color={COLORS.accent} />}
           </View>
 
+          {!searching && results.length === 0 && searchedFor !== '' && searchedFor === query.trim() && (
+            <Text className="mt-2 px-1 text-[12.5px] leading-5 text-muted">
+              No places found for “{searchedFor}”{city.trim() ? ` in ${city.trim()}` : ''}.{' '}
+              {city.trim() ? 'Try the full name or a nearby landmark.' : 'Add the city above, or include it in the search.'}
+            </Text>
+          )}
+
           {results.length > 0 && (
             <View className="mt-2 overflow-hidden rounded-2xl bg-white" style={SHADOWS.soft}>
               {results.map((r) => (
@@ -215,7 +239,7 @@ export default function BuildTrip() {
                   </View>
                   <View className="flex-1">
                     <Text className="text-[15px] font-semibold text-ink" numberOfLines={1}>{s.title}</Text>
-                    {!!s.area && <Text className="text-[11.5px] text-muted" numberOfLines={1}>{s.area}</Text>}
+                    {(!!s.area || s.day != null) && <Text className="text-[11.5px] text-muted" numberOfLines={1}>{[s.day != null ? `Day ${s.day}` : null, s.area].filter(Boolean).join(' · ')}</Text>}
                   </View>
                   <Pressable onPress={() => move(i, -1)} disabled={i === 0} hitSlop={6} className="h-8 w-7 items-center justify-center">
                     <View className="rotate-180">

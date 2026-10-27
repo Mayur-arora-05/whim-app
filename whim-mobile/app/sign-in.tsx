@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { supabase } from '@/lib/supabase';
+import { isObjectionable } from '@/lib/moderation';
 import { COLORS, SHADOWS, press } from '@/lib/theme';
 
 type Mode = 'sign-in' | 'sign-up' | 'forgot';
@@ -77,6 +78,10 @@ export default function SignIn() {
     }
     if (mode === 'sign-up' && !name.trim()) {
       Alert.alert('What’s your name?', 'Friends will see it when you plan trips together.');
+      return;
+    }
+    if (mode === 'sign-up' && isObjectionable(name)) {
+      Alert.alert('Pick another name', 'That name contains language we don’t allow.');
       return;
     }
 

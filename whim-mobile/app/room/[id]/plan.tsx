@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { useRoomStore } from '@/store/useRoomStore';
+import { useLocalSearchParams } from 'expo-router';
+import { useEnsureRoom, useRoomStore } from '@/store/useRoomStore';
 import { estimateTransitMins, googleMapsDirectionsUrl, orderSpots } from '@/lib/route';
 import { getTransit, legText, type TransitResult } from '@/lib/transit';
 import { VIBE_LABEL } from '@/data/vibes';
@@ -11,16 +12,26 @@ import RouteMap from '@/components/RouteMap';
 import ShareCard from '@/components/ShareCard';
 import BackButton from '@/components/BackButton';
 import Icon from '@/components/Icon';
+import DashedRail from '@/components/DashedRail';
+import { track } from '@/lib/analytics';
+import { useRouteAnalytics } from '@/lib/useRouteAnalytics';
+import { toast } from '@/lib/toast';
+import { COLORS } from '@/lib/theme';
 
 // The Rooms payoff — the group's matches sequenced into one shared day:
 // hours-smart order, transit legs, map, Open in Maps, and a shareable card.
 // Same engine as the solo itinerary; the input is what EVERYONE liked.
 export default function RoomPlan() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  useEnsureRoom(id);
   const room = useRoomStore((s) => s.room);
   const matches = useRoomStore((s) => s.matches);
   const members = useRoomStore((s) => s.members);
+  const matchesLoaded = useRoomStore((s) => s.matchesLoaded);
 
   const stops = useMemo(() => orderSpots(matches.map((m) => m.spot)), [matches]);
+  useRouteAnalytics('room', room?.city, room?.vibe, stops.length, !!room && matchesLoaded, room?.id);
+
   const [legs, setLegs] = useState<Record<number, TransitResult | null>>({});
 
   useEffect(() => {
@@ -46,7 +57,8 @@ export default function RoomPlan() {
     else if (leg) label = legText(leg);
     else label = `🚇 ~${estimateTransitMins(stops[idx], stops[idx + 1])} min · est.`;
     return (
-      <View className="my-1 ml-3.5 flex-row items-center border-l-2 border-dashed border-[#D7D1C6] py-1 pl-4">
+      <View className="my-1 ml-3.5 flex-row items-center py-1 pl-4">
+        <DashedRail />
         <View className="rounded-full bg-[#EFEBE3] px-3 py-1.5">
           <Text className="text-[11.5px] font-medium text-muted">{label}</Text>
         </View>
@@ -56,7 +68,9 @@ export default function RoomPlan() {
 
   const openInMaps = () => {
     const url = googleMapsDirectionsUrl(stops);
-    if (url) Linking.openURL(url).catch(() => {});
+    if (url) Linking.openURL(url)
+      .then(() => track('open_in_maps', { mode: 'room', room_id: room?.id, city: room?.city, vibe: room?.vibe, stop_count: stops.length }))
+      .catch(() => toast('Couldn’t open Maps.'));
   };
 
   const shareRef = useRef<View>(null);
@@ -64,6 +78,7 @@ export default function RoomPlan() {
     try {
       const uri = await captureRef(shareRef, { format: 'png', quality: 1, result: 'tmpfile' });
       if (await Sharing.isAvailableAsync()) {
+        track('plan_share_requested', { mode: 'room', room_id: room?.id, city: room?.city, vibe: room?.vibe, stop_count: stops.length });
         await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Share your crew’s day' });
       }
     } catch (e) {
@@ -71,7 +86,13 @@ export default function RoomPlan() {
     }
   };
 
-  if (!room) return null;
+  if (!room) {
+    return (
+      <SafeAreaView className="flex-1 items-center justify-center bg-canvas">
+        <ActivityIndicator color={COLORS.accent} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-canvas" edges={[]}>

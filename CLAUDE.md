@@ -1,5 +1,11 @@
 # Whim
 
+> **Product name: BeWhim** — use it in every user-facing string (app UI, `docs/`
+> pages, notifications, App Store listing, website). "Whim" survives only as an
+> internal identifier: repo, bundle id `com.pranjalrai.whim`, `whim://` scheme,
+> Xcode project, store names (`useWhimStore`). Never rename those — a new bundle
+> id is a different App Store app.
+
 A travel-discovery iOS app: swipe through curated spots for a city + "vibe", save
 the ones you like into a **Hitlist**, and get an auto-sequenced day plan you can
 route on a map and share. Think "Tinder for places to go." Target: the App Store.
@@ -7,6 +13,8 @@ route on a map and share. Think "Tinder for places to go." Target: the App Store
 > **Continuing this project? Read `HANDOFF.md` next** — non-negotiable security
 > rules (with the incidents behind them), the App Store compliance map, pipeline
 > runbooks, and how the user likes to work. `ROADMAP.md` has the phased plan.
+> **`STATUS.md`** is the latest audit (what works / what's broken / uncommitted
+> changes / next steps) — read it before picking up open issues.
 
 > **Repo layout:** this git repo (`whim-app`) is a small monorepo. The Expo app
 > lives in **`whim-mobile/`** — that's where you run every command. `.agents/`

@@ -16,6 +16,7 @@ export interface MicroActivity {
   mins: number; // walking minutes from the anchor
   tone: string; // placeholder colour until real imagery loads
   photo: string; // alt / description; swap for an image URL in production
+  placeId?: string; // Google place (seed-nearby) — the app shows its live photo
   lat?: number;
   lng?: number;
 }

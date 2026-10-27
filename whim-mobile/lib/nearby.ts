@@ -30,24 +30,54 @@ export type NearbyVibes = Record<VibeId, NearbySpot[]>;
 export interface NearbyResult {
   center: [number, number];
   vibes: NearbyVibes;
+  /** true = Google's raw picks; blurbs/tips are still being written — poll for them. */
+  enriching?: boolean;
 }
 
-/** Fetch nearby spots grouped by vibe. Returns null on any failure. */
+type NearbyResponse = { center: [number, number]; vibes: NearbyVibes; enriching?: boolean; pending?: boolean };
+
+// annotate each spot with distance from the user for display + sorting
+function withDistances(vibes: NearbyVibes, lat: number, lng: number): NearbyVibes {
+  for (const vibe of Object.keys(vibes) as VibeId[]) {
+    vibes[vibe] = vibes[vibe].map((s) => ({
+      ...s,
+      km: s.lat != null && s.lng != null ? distanceKm({ lat, lng }, { lat: s.lat, lng: s.lng }) : undefined,
+    }));
+  }
+  return vibes;
+}
+
+/**
+ * Fetch nearby spots grouped by vibe — two-phase: returns Google's results as
+ * soon as they're in (`enriching: true` while the AI blurbs/tips are still being
+ * written server-side; follow up with `pollNearby`). Returns null on any failure.
+ */
 export async function fetchNearby(lat: number, lng: number, radius = 3000): Promise<NearbyResult | null> {
   try {
-    const { data, error } = await supabase.functions.invoke<{ center: [number, number]; vibes: NearbyVibes }>(
-      'nearby-places',
-      { body: { lat, lng, radius, hour: new Date().getHours() } },
-    );
+    const { data, error } = await supabase.functions.invoke<NearbyResponse>('nearby-places', {
+      body: { lat, lng, radius, hour: new Date().getHours(), phase: 'fast' },
+    });
     if (error || !data?.vibes) return null;
-    // annotate each spot with distance from the user for display + sorting
-    for (const vibe of Object.keys(data.vibes) as VibeId[]) {
-      data.vibes[vibe] = data.vibes[vibe].map((s) => ({
-        ...s,
-        km: s.lat != null && s.lng != null ? distanceKm({ lat, lng }, { lat: s.lat, lng: s.lng }) : undefined,
-      }));
-    }
-    return { center: data.center, vibes: data.vibes };
+    return { center: data.center, vibes: withDistances(data.vibes, lat, lng), enriching: data.enriching === true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check whether the enriched results for this spot are ready (cache read only —
+ * no Google calls, doesn't count toward the daily cap). Must use the same
+ * lat/lng/radius as the `fetchNearby` call. 'pending' = not yet; null = failed.
+ */
+export async function pollNearby(lat: number, lng: number, radius = 3000): Promise<NearbyResult | 'pending' | null> {
+  try {
+    const { data, error } = await supabase.functions.invoke<NearbyResponse>('nearby-places', {
+      body: { lat, lng, radius, hour: new Date().getHours(), phase: 'poll' },
+    });
+    if (error || !data) return null;
+    if (data.pending) return 'pending';
+    if (!data.vibes) return null;
+    return { center: data.center, vibes: withDistances(data.vibes, lat, lng) };
   } catch {
     return null;
   }

@@ -33,8 +33,10 @@ interface IconProps {
 
 export default function Icon({ name, size = 24, color = COLORS.ink, strokeWidth = 1.8 }: IconProps) {
   const s = { stroke: color, strokeWidth, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  // key={name}: react-native-svg updates a reused <Path> in place and can keep
+  // the old shape/fill (heart → heartFilled stayed filled), so remount on change
   const svg = (children: React.ReactNode) => (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Svg key={name} width={size} height={size} viewBox="0 0 24 24" fill="none">
       {children}
     </Svg>
   );

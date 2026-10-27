@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { useRoomStore } from '@/store/useRoomStore';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEnsureRoom, useRoomStore } from '@/store/useRoomStore';
 import SwipeDeck from '@/components/SwipeDeck';
 import BackButton from '@/components/BackButton';
 import Icon from '@/components/Icon';
@@ -9,8 +9,11 @@ import { COLORS } from '@/lib/theme';
 
 // Group deck — same SwipeDeck, but a right-swipe is a VOTE for the crew's
 // shared plan, not a personal save. No micro-discovery here: the group decides
-// on anchors; detours stay personal. (Store state was set up by the lobby.)
+// on anchors; detours stay personal. (The lobby usually loads the room;
+// useEnsureRoom covers opening this screen directly.)
 export default function RoomSwipe() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  useEnsureRoom(id);
   const room = useRoomStore((s) => s.room);
   const deck = useRoomStore((s) => s.deck);
   const deckIndex = useRoomStore((s) => s.deckIndex);

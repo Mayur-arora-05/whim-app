@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSavedGuides } from '@/lib/useSavedGuides';
+import { track } from '@/lib/analytics';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { fetchPublishedItinerary, reportItinerary, blockUser, deleteMyItinerary, type PublishedItinerary, type TripStop } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
@@ -9,9 +11,11 @@ import RouteMap from '@/components/RouteMap';
 import { VIBE_DOT } from '@/data/vibes';
 import { COLORS, SHADOWS, press } from '@/lib/theme';
 import { toast } from '@/lib/toast';
+import { hideBlockedAuthor } from '@/lib/blockCache';
 import { useQueryClient } from '@tanstack/react-query';
 import BackButton from '@/components/BackButton';
 import Icon from '@/components/Icon';
+import DashedRail from '@/components/DashedRail';
 
 type State =
   | { kind: 'loading' }
@@ -24,6 +28,8 @@ type State =
 export default function Trip() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
+  const saved = useSavedGuides();
+  const insets = useSafeAreaInsets();
   const [state, setState] = useState<State>({ kind: 'loading' });
 
   const load = useCallback(async () => {
@@ -92,13 +98,14 @@ export default function Trip() {
   const dayVals = stops.map((s) => s.day).filter((d): d is number => d != null);
   const multiDay = new Set(dayVals).size > 1;
   const dayNums = multiDay ? [...new Set(dayVals)].sort((a, b) => a - b) : [0];
-  const groups = dayNums.map((d) => ({ day: d, stops: d === 0 ? stops : stops.filter((s) => s.day === d) }));
+  if (multiDay && stops.some(s => s.day == null)) dayNums.push(0);
+  const groups = dayNums.map((d) => ({ day: d, stops: d === 0 ? (multiDay ? stops.filter(s => s.day == null) : stops) : stops.filter((s) => s.day === d) }));
 
-  const remix = () => router.push(`/build-trip?from=${itin.id}`);
+  const remix = () => { track('guide_remix_started', { guide_id: itin.id }); router.push(`/build-trip?from=${itin.id}`); };
 
   const openRoute = (list: TripStop[]) => {
     const url = googleMapsDirectionsUrl(toRoute(list));
-    if (url) Linking.openURL(url).catch(() => {});
+    if (url) Linking.openURL(url).catch(() => toast('Couldn’t open Maps. Try again.'));
   };
   const openStop = (s: TripStop) =>
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${s.title} ${itin.city ?? ''}`)}&query_place_id=${s.id}`).catch(() => {});
@@ -129,19 +136,28 @@ export default function Trip() {
       {
         text: 'Block this person',
         style: 'destructive',
-        onPress: () => {
-          blockUser(itin.authorId).catch(() => {});
-          toast('Blocked — you won’t see their content.');
-          router.back();
+        onPress: async () => {
+          try {
+            await blockUser(itin.authorId);
+            hideBlockedAuthor(qc, itin.authorId);
+            toast('Blocked — you won’t see their content.');
+            router.back();
+          } catch {
+            toast('Couldn’t block — check your connection and try again.');
+          }
         },
       },
       {
         text: 'Report trip',
         style: 'destructive',
-        onPress: () => {
-          reportItinerary(itin.id, 'reported from trip view').catch(() => {});
-          toast('Thanks — we’ll review this within 24 hours.');
-          router.back();
+        onPress: async () => {
+          try {
+            await reportItinerary(itin.id, 'reported from trip view');
+            toast('Thanks — we’ll review this within 24 hours.');
+            router.back();
+          } catch {
+            toast('Couldn’t send the report — check your connection and try again.');
+          }
         },
       },
     ]);
@@ -151,18 +167,9 @@ export default function Trip() {
     <SafeAreaView className="flex-1 bg-canvas" edges={[]}>
       <RouteMap key={itin.id} stops={mapStops} height={260} />
 
-      <View className="absolute left-4 right-4 top-14 flex-row items-center justify-between">
+      <View style={{ top: insets.top + 8 }} className="absolute left-4 right-4 flex-row items-center justify-between">
         <BackButton />
         <View className="flex-row items-center gap-2">
-          <Pressable
-            onPress={remix}
-            accessibilityLabel="Make it mine"
-            className="h-9 flex-row items-center gap-1 rounded-full bg-accent px-3.5"
-            style={SHADOWS.accent}
-          >
-            <Icon name="route" size={13} color="#fff" strokeWidth={2.4} />
-            <Text className="text-[12.5px] font-semibold text-white">Make it mine</Text>
-          </Pressable>
           <Pressable
             onPress={moderate}
             accessibilityLabel={mine ? 'Unpublish' : 'Report'}
@@ -178,7 +185,7 @@ export default function Trip() {
         <View className="flex-row items-center gap-2">
           <Icon name="route" size={14} color={COLORS.accent} strokeWidth={2.2} />
           <Text className="font-mono text-[11px] tracking-[0.16em] text-accent">
-            {official ? "BEWHIM · EDITORS’ PICK" : 'PUBLISHED TRIP'}
+            {official ? "BEWHIM · EDITORS’ PICK" : 'COMMUNITY GUIDE'}
           </Text>
         </View>
         <Text className="mt-2 font-serif text-[27px] leading-[1.06] text-ink">{itin.title}</Text>
@@ -186,12 +193,31 @@ export default function Trip() {
           {itin.vibe && !multiDay && <View className="h-2 w-2 rounded-full" style={{ backgroundColor: VIBE_DOT[itin.vibe] }} />}
           <Text className="font-mono text-[10.5px] uppercase tracking-wide text-muted">
             {itin.authorName ? `by ${itin.authorName} · ` : ''}
-            {multiDay ? `${dayNums.length} days · ` : ''}
+            {multiDay ? `${new Set(dayVals).size} days · ` : ''}
             {stops.length} stops
             {itin.city ? ` · ${itin.city}` : ''}
           </Text>
         </View>
+        <Pressable onPress={() => router.push(`/creator/${itin.authorId}`)} accessibilityRole="button" className="mt-2 min-h-[44px] flex-row items-center gap-2 self-start py-2">
+          <Icon name="person" size={16} color={COLORS.accent} />
+          <Text className="flex-shrink text-[13px] font-semibold text-accent">More guides by {itin.authorName || 'this creator'}</Text>
+          <Icon name="arrowRight" size={14} color={COLORS.accent} />
+        </Pressable>
         {itin.note ? <Text className="mt-3 text-[14.5px] leading-6 text-ink/80">{itin.note}</Text> : null}
+
+        <View className="mt-4 flex-row flex-wrap gap-2">
+          <Pressable onPress={remix} style={press(SHADOWS.accent)} className="min-h-[48px] flex-row items-center justify-center gap-2 rounded-2xl bg-accent px-4 py-3">
+            <Icon name="route" size={16} color={COLORS.canvas} />
+            <Text className="text-[14px] font-semibold text-white">Customize this guide</Text>
+          </Pressable>
+          <Pressable onPress={() => saved.toggle(itin.id)} disabled={saved.busy || saved.loading || saved.error}
+            accessibilityRole="button" accessibilityState={{ selected: saved.ids.includes(itin.id), disabled: saved.busy || saved.loading || saved.error }}
+            className="min-h-[48px] flex-row items-center justify-center gap-2 rounded-2xl border border-ink/10 bg-white px-4 py-3">
+            <Icon name={saved.ids.includes(itin.id) ? 'heartFilled' : 'heart'} size={16} color={COLORS.accent} />
+            <Text className="text-[14px] font-semibold text-ink">{saved.busy ? 'Saving…' : saved.ids.includes(itin.id) ? 'Saved guide' : 'Save guide'}</Text>
+          </Pressable>
+        </View>
+        {saved.error ? <Pressable onPress={() => saved.retry()} className="py-3"><Text className="text-[12px] text-accent">Couldn’t read saved guides. Tap to retry.</Text></Pressable> : <Text className="mt-2 text-[11px] text-muted">Free to customize · {saved.synced ? 'saved guides sync to your account' : 'saved guides stay on this device'}</Text>}
 
         {!multiDay && mapStops.length > 0 && (
           <Pressable
@@ -210,7 +236,7 @@ export default function Trip() {
               <View className="mb-3 flex-row items-center justify-between">
                 <View className="flex-row items-center gap-2.5">
                   <View className="rounded-lg bg-accent px-2.5 py-1">
-                    <Text className="font-mono text-[10.5px] font-bold tracking-[0.12em] text-white">DAY {g.day}</Text>
+                    <Text className="font-mono text-[10.5px] font-bold tracking-[0.12em] text-white">{g.day === 0 ? 'EXTRA STOPS' : `DAY ${g.day}`}</Text>
                   </View>
                   <Text className="font-serif text-[17px] text-ink">
                     {g.stops[0]?.area || itin.city} & around
@@ -224,7 +250,11 @@ export default function Trip() {
             )}
             {g.stops.map((s, idx) => (
               <View key={s.id}>
-                {idx > 0 && <View className="my-1 ml-3.5 h-5 border-l-2 border-dashed border-[#D7D1C6]" />}
+                {idx > 0 && (
+                  <View className="my-1 ml-3.5 h-5">
+                    <DashedRail />
+                  </View>
+                )}
                 <Pressable
                   onPress={() => openStop(s)}
                   style={press(SHADOWS.soft)}

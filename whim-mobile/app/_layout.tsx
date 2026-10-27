@@ -24,6 +24,10 @@ import { queryClient } from '@/lib/queryClient';
 import ToastHost from '@/components/Toast';
 import AnimatedSplash from '@/components/AnimatedSplash';
 import '@/lib/mapbox'; // sets the Mapbox access token once at startup
+import { installFontScaleCap } from '@/lib/fontScale';
+
+// cap Dynamic Type at XXXL before anything renders (see lib/fontScale.ts)
+installFontScaleCap();
 
 // keep the native splash up until the animated overlay is ready to take over
 SplashScreen.preventAutoHideAsync().catch(() => {});

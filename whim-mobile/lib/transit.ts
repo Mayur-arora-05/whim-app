@@ -43,12 +43,20 @@ export function legText(leg: TransitResult): string {
   return leg.totalDuration ? `${lines}  ·  ${leg.totalDuration}` : lines;
 }
 
+// Google Routes has no transit data for Japan — it answers empty (or a walk-only
+// route), and empty answers aren't cached server-side, so every Route view there
+// re-bills Google for nothing. Coarse box over the main islands; its west edge
+// (129.5°E) keeps Busan/Seoul out.
+const inJapan = (s: RouteStop) => s.lat >= 30 && s.lat <= 46 && s.lng >= 129.5 && s.lng <= 146;
+
 /**
  * Public-transit directions between two stops via the cache-aside Edge Function.
  * Returns null on any failure (function not deployed yet, no Google key, no
- * transit found) so the UI can fall back to a time estimate.
+ * transit found, or a Japan leg Google can't route) so the UI can fall back to
+ * a time estimate.
  */
 export async function getTransit(origin: RouteStop, dest: RouteStop): Promise<TransitResult | null> {
+  if (inJapan(origin) && inJapan(dest)) return null;
   try {
     const { data, error } = await supabase.functions.invoke<TransitResult>('transit-route', {
       body: { origin: [origin.lat, origin.lng], dest: [dest.lat, dest.lng] },

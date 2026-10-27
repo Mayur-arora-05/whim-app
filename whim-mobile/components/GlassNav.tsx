@@ -1,4 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import Icon, { type IconName } from './Icon';
 import { COLORS, SHADOWS } from '@/lib/theme';
@@ -19,14 +20,15 @@ const ITEMS: { name: string; label: string; icon: IconName }[] = [
 const FADE_BANDS = [0, 0.04, 0.09, 0.16, 0.26, 0.38, 0.52, 0.68, 0.84, 1];
 
 export default function GlassNav({ state, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
   return (
-    <>
+    <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 150, zIndex: 10 }}>
       <View pointerEvents="none" className="absolute bottom-0 left-0 right-0" style={{ height: 150 }}>
         {FADE_BANDS.map((opacity, i) => (
           <View key={i} style={{ flex: 1, backgroundColor: `rgba(240,238,232,${opacity})` }} />
         ))}
       </View>
-      <View pointerEvents="box-none" className="absolute bottom-7 left-0 right-0 items-center">
+      <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: Math.max(insets.bottom, 20), alignItems: 'center' }}>
         <View className="flex-row gap-0.5 rounded-full p-1.5" style={{ backgroundColor: 'rgba(255,255,255,0.96)', ...SHADOWS.nav }}>
         {ITEMS.map((item) => {
           const routeIndex = state.routes.findIndex((r) => r.name === item.name);
@@ -46,7 +48,9 @@ export default function GlassNav({ state, navigation }: BottomTabBarProps) {
               className="w-[58px] items-center gap-1 py-2"
             >
               <Icon name={item.icon} size={23} color={color} strokeWidth={1.8} />
-              <Text className="text-[10px] font-semibold" style={{ color }}>
+              {/* fixed size like iOS's own tab bar: labels don't follow Dynamic Type —
+                  at large sizes "Community" wrapped to two lines in the pill */}
+              <Text allowFontScaling={false} numberOfLines={1} className="text-[10px] font-semibold" style={{ color }}>
                 {item.label}
               </Text>
             </Pressable>
@@ -54,6 +58,6 @@ export default function GlassNav({ state, navigation }: BottomTabBarProps) {
         })}
         </View>
       </View>
-    </>
+    </View>
   );
 }

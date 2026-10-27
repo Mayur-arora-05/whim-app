@@ -85,8 +85,8 @@ Any public/competitive stat must count `verified` stamps only.
 | Purpose strings | ✓ location when-in-use string in app.json — keep honest and specific |
 | 4.8 Sign in with Apple | NOT currently required (email/password only). It becomes REQUIRED the moment any third-party login (Google etc.) is added. Code exists behind `APPLE_ENABLED` flag + needs paid account |
 | 3.1.1 payments | Any future digital purchase (tips, premium guides, marketplace) MUST use Apple IAP. No external payment links/buttons in-app. Physical-world services are exempt — itinerary content is NOT physical |
-| 1.2 UGC (future publishing phase) | Before shipping user-published itineraries/spots: report/flag button, content moderation queue, ability to block users, contact method. Plan exists in ROADMAP Phase 4 — do not ship UGC without the moderation kit |
-| 5.1.2 data use | No ads, no tracking, no data sale. If analytics are added, choose privacy-light (no ATT needed) and disclose in privacy labels |
+| 1.2 UGC (live: guides, community spots, rooms, names) | Filter: `lib/moderation.ts` blocklist on guide title/note, room name, display name, handle (client-side only — a server-side check is still TODO). Report: feed, trip page, room lobby. Block: feed, trip page, creator page, room lobby. Terms: zero-tolerance clause, agreed at sign-up. Contact: hello@bewhimsy.app in Settings. **Review queue: run `scripts/review-reports.mjs` daily — the app promises 24 h** (see Moderation runbook) |
+| 5.1.2 data use | No ads, no tracking, no data sale. Self-hosted analytics + crash logs (`analytics_events`, `error_logs`) are **linked to the user id** — privacy.html says so (updated 2026-10-03) and the App Store privacy labels must list Usage Data + Diagnostics as *linked to user, not used for tracking*. No ATT needed |
 | Privacy nutrition labels (at submission) | Collected: email, display name, user content (saved spots/check-ins/votes), coarse "used but not stored" location. No tracking |
 | 2.3 metadata | Screenshots/description must match the real app at review time |
 | Local notifications only | until paid account + APNs; don't claim push features before then |
@@ -122,6 +122,26 @@ node --env-file=.env.seed scripts/mirror-photos.mjs  # ALWAYS after seed (seed r
   harmless (micros show minutes, not pins); Places API can resolve them
   in-app later.
 
+### Catalogue balance (every city comparable) — added 2026-10-12
+Most cities come from the `seed-city` Edge Function (Google + Claude), not the
+curated JSON. Keep every picker city at ≥10 places per vibe (target 12) and
+3–5 sub-places per place. Back up first, then:
+```bash
+cd whim-mobile
+node --env-file=.env.seed scripts/backup-spots.mjs
+node --env-file=.env.seed scripts/seed-catalogue.mjs --decks --dry   # plan
+node --env-file=.env.seed scripts/seed-catalogue.mjs --decks         # top up thin decks (adds new places only)
+node --env-file=.env.seed scripts/seed-catalogue.mjs --nearby        # sub-places for places that have none
+node --env-file=.env.seed scripts/seed-catalogue.mjs --backfill      # place_id on hand-curated sub-places (photos)
+```
+- Order matters: a plain (non-top-up) `seed-city` run **overwrites** existing
+  rows and resets their `nearby` to `[]`. Use top-up mode (the runner does).
+- Small cities: re-run `--decks --city=X --radius=20000 --min-ratings=20`.
+- Run one pass at a time — parallel passes hit Google 429s.
+- State 2026-10-12: 3,128 places, 42–74 per city (median 48), every
+  city×vibe ≥10 except Darmstadt classics 7 and Split nature 8 (Google has
+  no more); 12,321 sub-places, 3 remote nature reserves have none.
+
 ### App build/run
 - JS-only change: Metro reload (`npm run start`, sim app reloads).
 - Native change (new module, icon, splash, plugins): `npx expo prebuild
@@ -137,9 +157,33 @@ node --env-file=.env.seed scripts/mirror-photos.mjs  # ALWAYS after seed (seed r
 - Schema changes = numbered migration file in `whim-mobile/supabase/migrations/`
   (source of truth), applied via the management API `database/query` endpoint
   with a user-provided token (temp-file pattern) or SQL editor.
-- Edge Function deploys: `SUPABASE_ACCESS_TOKEN=... supabase functions deploy
-  <name> --project-ref gvqldgkdtitueyijptmt`.
+- Edge Function deploys: `supabase login` once (browser flow; the CLI keeps
+  the token in its own store), then `supabase functions deploy <name>
+  --project-ref gvqldgkdtitueyijptmt`. Never put the token inline in the
+  command (§1). Without Docker the CLI bundles server-side — that's fine.
 - Project ref: `gvqldgkdtitueyijptmt`.
+
+### Backups (free tier has none)
+- **Backup** (read-only, run before every seed batch / migration / launch):
+  `cd whim-mobile && node --env-file=.env.seed scripts/backup-spots.mjs`
+  → `~/whim-backups/spots-<timestamp>.json` + `.sha256` (outside the public
+  repo on purpose). It verifies row count vs the live table and unique ids.
+  Keep a copy somewhere off this Mac (private drive).
+- **Restore** — production write, only with Pranjal's explicit go:
+  1. `shasum -a 256 -c <file>.sha256` — refuse a file that fails.
+  2. Take a fresh backup of the current state first.
+  3. Upsert `rows` in batches of ~500 with the service key:
+     `supabase.from('spots').upsert(batch, { onConflict: 'id' })`.
+     Upsert restores/overwrites rows; it does NOT delete rows added since.
+  4. Check counts per city against the file's `per_city`.
+- Last backup: 2026-09-30 — 2,892 spots, 64 cities, 1,377 micros.
+- Supabase Pro (daily backups) is tracked in Linear WHI-25.
+
+### Moderation runbook (App Store 1.2)
+The app tells reporters "we review reports within 24 hours", so someone must actually look daily.
+1. `cd whim-mobile && node --env-file=.env.seed scripts/review-reports.mjs 1` (read-only; lists guide, spot and room-member reports with the content).
+2. Violating guide/spot: set its `status` to `'rejected'` in the Supabase dashboard (hides it from everyone but the author). Repeat or severe offender: delete the account (Auth → Users).
+3. Nothing in the app reads the report tables and nobody is alerted when one arrives — a daily check is the only safeguard until we add a notification.
 
 ### GitHub Pages (docs/)
 Auth/confirm/reset/privacy pages. Deploys on push from `main:/docs`; builds

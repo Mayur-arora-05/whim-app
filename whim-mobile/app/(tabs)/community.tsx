@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, RefreshControl, ScrollView, SectionList, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, RefreshControl, ScrollView, SectionList, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCommunityFeed,
+  fetchSavedGuideFeed,
   fetchViewer,
   promoteSpot,
   reportCommunitySpot,
@@ -19,14 +20,19 @@ import { sizedPhoto } from '@/lib/img';
 import { VIBE_DOT, VIBE_LABEL } from '@/data/vibes';
 import { COLORS, SHADOWS, press } from '@/lib/theme';
 import { toast } from '@/lib/toast';
+import { hideBlockedAuthor } from '@/lib/blockCache';
 import Icon from '@/components/Icon';
+import { filterGuideFeed, guideCities } from '@/lib/guideCatalog';
+import { useSavedGuides } from '@/lib/useSavedGuides';
+import { useAuth } from '@/lib/auth';
 
 type State = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; items: FeedItem[] };
-type Filter = 'all' | 'itinerary' | 'spot';
+type Filter = 'all' | 'itinerary' | 'spot' | 'saved';
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'Everything' },
-  { id: 'itinerary', label: 'Trips' },
+  { id: 'itinerary', label: 'Guides' },
+  { id: 'saved', label: 'Saved' },
   { id: 'spot', label: 'Spots' },
 ];
 
@@ -44,6 +50,15 @@ function ago(iso: string): string {
 export default function Community() {
   const [filter, setFilter] = useState<Filter>('all');
   const qc = useQueryClient();
+  const [query, setQuery] = useState('');
+  const [city, setCity] = useState('');
+  const saved = useSavedGuides();
+  const { session } = useAuth();
+  const shelf = useQuery({
+    queryKey: ['savedGuideFeed', session?.user.id, saved.ids],
+    queryFn: () => fetchSavedGuideFeed(saved.ids),
+    enabled: filter === 'saved' && !saved.loading && !saved.error,
+  });
   const feed = useQuery({ queryKey: ['communityFeed'], queryFn: fetchCommunityFeed });
   const { data: viewer = { id: null, isAdmin: false } } = useQuery({
     queryKey: ['viewer'],
@@ -51,14 +66,17 @@ export default function Community() {
     staleTime: 5 * 60_000,
   });
 
-  const items = feed.data ?? [];
-  const state: State = feed.isLoading ? { kind: 'loading' } : feed.isError ? { kind: 'error' } : { kind: 'ready', items };
-  const refreshing = feed.isRefetching;
-  const load = () => feed.refetch();
-  const refresh = () => feed.refetch();
+  const active = filter === 'saved' ? shelf : feed;
+  const items = active.data ?? [];
+  const state: State = active.isLoading || (filter === 'saved' && saved.loading) ? { kind: 'loading' } : active.isError || (filter === 'saved' && saved.error) ? { kind: 'error' } : { kind: 'ready', items };
+  const refreshing = active.isRefetching;
+  const load = () => { if (filter === 'saved' && saved.error) void saved.retry(); else void active.refetch(); };
+  const refresh = load;
 
-  const removeLocally = (id: string) =>
+  const removeLocally = (id: string) => {
     qc.setQueryData<FeedItem[]>(['communityFeed'], (old) => (old ?? []).filter((i) => i.id !== id));
+    qc.setQueriesData<FeedItem[]>({ queryKey: ['savedGuideFeed'] }, old => old?.filter(i => i.id !== id));
+  };
 
   const moderate = (item: FeedItem) => {
     const mine = item.authorId === viewer.id;
@@ -98,22 +116,29 @@ export default function Community() {
         {
           text: 'Block this person',
           style: 'destructive',
-          onPress: () => {
-            blockUser(item.authorId).catch(() => {});
-            removeLocally(item.id);
-            toast('Blocked — you won’t see their content.');
+          onPress: async () => {
+            try {
+              await blockUser(item.authorId);
+              hideBlockedAuthor(qc, item.authorId);
+              toast('Blocked — you won’t see their content.');
+            } catch {
+              toast('Couldn’t block — check your connection and try again.');
+            }
           },
         },
         {
           text: `Report ${item.kind === 'itinerary' ? 'trip' : 'spot'}`,
           style: 'destructive',
-          onPress: () => {
-            (item.kind === 'itinerary'
-              ? reportItinerary(item.id, 'reported from feed')
-              : reportCommunitySpot(item.id, 'reported from feed')
-            ).catch(() => {});
-            removeLocally(item.id);
-            toast('Thanks — we’ll review this within 24 hours.');
+          onPress: async () => {
+            try {
+              await (item.kind === 'itinerary'
+                ? reportItinerary(item.id, 'reported from feed')
+                : reportCommunitySpot(item.id, 'reported from feed'));
+              removeLocally(item.id);
+              toast('Thanks — we’ll review this within 24 hours.');
+            } catch {
+              toast('Couldn’t send the report — check your connection and try again.');
+            }
           },
         },
       );
@@ -216,7 +241,9 @@ export default function Community() {
 
   // filter by type, then split into ownership sections
   const nameOf = (i: FeedItem) => (i.kind === 'itinerary' ? i.authorName : null);
-  const filtered = state.kind === 'ready' ? state.items.filter((i) => filter === 'all' || i.kind === filter) : [];
+  const filtered = state.kind === 'ready' ? filterGuideFeed(state.items, query, city).filter((i) => filter === 'all' || filter === 'saved' || i.kind === filter) : [];
+  const cities = guideCities(items);
+  const narrowed = !!query.trim() || !!city;
   const sections = [
     { key: 'mine', title: 'Yours', items: filtered.filter((i) => i.authorId === viewer.id) },
     { key: 'editors', title: "Editors’ picks", items: filtered.filter((i) => nameOf(i) === 'BeWhim' && i.authorId !== viewer.id) },
@@ -231,30 +258,53 @@ export default function Community() {
             <View className="h-1.5 w-1.5 rounded-full bg-accent" />
             <Text className="font-mono text-[11px] tracking-[0.16em] text-accent">COMMUNITY</Text>
           </View>
-          <Pressable onPress={() => router.push('/build-trip')} style={press(SHADOWS.accent)} className="h-8 flex-row items-center gap-1 rounded-full bg-accent pl-2.5 pr-3.5">
-            <Icon name="route" size={13} color="#fff" strokeWidth={2.4} />
-            <Text className="text-[12.5px] font-bold text-white">New trip</Text>
-          </Pressable>
         </View>
-        <Text className="mt-1 font-serif text-[32px] leading-[1.02] text-ink">What people are sharing</Text>
-        <Text className="mt-1 text-[13.5px] text-muted">Real trips and spots, published by BeWhim travelers.</Text>
+        <Text className="mt-1 font-serif text-[32px] leading-[1.02] text-ink">Find your next day out</Text>
+        <Text className="mt-1 text-[13.5px] text-muted">City guides, ready-made routes, and spots from the community.</Text>
+        <Pressable onPress={() => router.push('/build-trip')} accessibilityRole="button"
+          style={press()} className="mt-4 min-h-[48px] flex-row items-center gap-3 rounded-2xl border border-accent/20 bg-accent-soft px-4 py-3">
+          <Icon name="route" size={19} color={COLORS.accent} strokeWidth={2} />
+          <Text className="flex-1 text-[14px] font-semibold text-accent">Create a guide</Text>
+          <Icon name="arrowRight" size={17} color={COLORS.accent} strokeWidth={2} />
+        </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-4 max-h-12" contentContainerStyle={{ paddingHorizontal: 20, gap: 10 }}>
+      <View className="mx-5 mt-3 flex-row items-center rounded-2xl border border-ink/10 bg-white px-4">
+        <TextInput value={query} onChangeText={setQuery} placeholder="Search city, guide, or creator" placeholderTextColor={COLORS.muted}
+          accessibilityLabel="Search community guides and spots" autoCorrect={false} returnKeyType="search" maxLength={100}
+          className="min-h-[44px] flex-1 py-3 text-[14px] text-ink" />
+        {!!query && <Pressable onPress={() => setQuery('')} accessibilityLabel="Clear search" className="min-h-[44px] min-w-[44px] items-center justify-center"><Icon name="close" size={18} /></Pressable>}
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        // never let the list below squeeze this row (ScrollViews shrink by default,
+        // which sliced the bottoms off the pills); pad so the selected shadow fits
+        className="mt-3 shrink-0 grow-0"
+        contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 6, gap: 10 }}
+      >
         {FILTERS.map((f) => {
           const on = f.id === filter;
           return (
             <Pressable
               key={f.id}
-              onPress={() => setFilter(f.id)}
+              onPress={() => { setFilter(f.id); setCity(''); }}
               style={press(on ? SHADOWS.accent : undefined)}
-              className={`h-9 items-center justify-center rounded-full border px-4 ${on ? 'border-accent bg-accent' : 'border-ink/10 bg-white'}`}
+              accessibilityRole="button" accessibilityState={{ selected: on }}
+              className={`min-h-[44px] shrink-0 items-center justify-center rounded-full border px-4 ${on ? 'border-accent bg-accent' : 'border-ink/10 bg-white'}`}
             >
               <Text className={`text-[13.5px] font-bold ${on ? 'text-white' : 'text-ink'}`}>{f.label}</Text>
             </Pressable>
           );
         })}
       </ScrollView>
+
+      {cities.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} className="shrink-0 grow-0" contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 4, gap: 8 }}>
+        {['', ...cities].map(value => <Pressable key={value} onPress={() => setCity(value)} accessibilityRole="button" accessibilityState={{ selected: city === value }} className="min-h-[44px] shrink-0 justify-center rounded-full px-3">
+          <Text className={`text-[12px] ${city === value ? 'font-bold text-accent' : 'text-muted'}`}>{value || 'All cities'}</Text>
+        </Pressable>)}
+      </ScrollView>}
+      {filter === 'saved' && <Text className="px-5 py-1 text-[11px] text-muted">{saved.synced ? 'Saved to your account' : 'Saved on this device'} · unavailable guides are hidden</Text>}
 
       {state.kind === 'loading' && (
         <View className="flex-1 items-center justify-center">
@@ -276,12 +326,12 @@ export default function Community() {
       {state.kind === 'ready' &&
         (sections.length === 0 ? (
           <View className="flex-1 items-center justify-center px-8">
-            <Text className="text-center font-serif text-[21px] text-ink">Nothing here yet</Text>
+            <Text className="text-center font-serif text-[21px] text-ink">{narrowed ? 'No matches yet' : filter === 'saved' ? 'Your guide shelf starts here' : 'Nothing here yet'}</Text>
             <Text className="mt-2 text-center text-[13.5px] leading-5 text-muted">
-              Be the first — build a trip for anywhere and publish it.
+              {narrowed ? 'Try another city, creator, or guide title.' : filter === 'saved' ? 'Open a guide and tap Save guide to keep it for later.' : 'Build a guide for a city you know and share your favorite stops.'}
             </Text>
-            <Pressable onPress={() => router.push('/build-trip')} style={press(SHADOWS.accent)} className="mt-5 h-12 flex-row items-center justify-center gap-2 rounded-full bg-accent px-6">
-              <Text className="text-[15px] font-bold text-white">＋ Create a trip</Text>
+            <Pressable onPress={() => { if (narrowed) { setQuery(''); setCity(''); } else if (filter === 'saved') setFilter('itinerary'); else router.push('/build-trip'); }} style={press(SHADOWS.accent)} className="mt-5 h-12 flex-row items-center justify-center gap-2 rounded-full bg-accent px-6">
+              <Text className="text-[15px] font-bold text-white">{narrowed ? 'Clear filters' : filter === 'saved' ? 'Explore guides' : 'Create a guide'}</Text>
             </Pressable>
           </View>
         ) : (

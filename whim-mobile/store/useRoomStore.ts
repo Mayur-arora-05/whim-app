@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { create } from 'zustand';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
@@ -19,6 +20,7 @@ import {
 } from '@/lib/db';
 import { toast } from '@/lib/toast';
 import { hapticSuccess } from '@/lib/haptics';
+import { track } from '@/lib/analytics';
 
 let blockedIds = new Set<string>();
 const visible = (members: RoomMember[]) => members.filter((m) => !blockedIds.has(m.userId));
@@ -41,6 +43,7 @@ interface RoomState {
   deckIndex: number;
   deckSourceCount: number;
   loading: boolean; // initial room load (deck + members + matches)
+  matchesLoaded: boolean; // first matches fetch for this room has landed
 
   enter: (roomId: string) => Promise<void>;
   leave: () => void;
@@ -49,12 +52,17 @@ interface RoomState {
   refreshMembers: () => Promise<void>;
   reportMember: (userId: string, reason: string) => void;
   blockMember: (userId: string) => void;
-  leaveCurrentRoom: () => Promise<void>;
+  leaveCurrentRoom: () => Promise<boolean>; // false = still a member (toast shown)
 }
 
 let channel: RealtimeChannel | null = null;
+// bumps on every enter()/leave(): an enter() whose awaits resolve after the
+// user already left (or entered another room) must not set state or subscribe
+let enterGen = 0;
 // distinguishes "first matches fetch after entering" (quiet) from live updates
 let matchesHydrated = false;
+let matchesRequest = 0;
+let membersRequest = 0;
 
 export const useRoomStore = create<RoomState>((set, get) => ({
   room: null,
@@ -64,11 +72,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   deckIndex: 0,
   deckSourceCount: 0,
   loading: false,
+  matchesLoaded: false,
 
   enter: async (roomId) => {
     get().leave(); // drop any previous room subscription
+    const gen = ++enterGen;
+    const stale = () => gen !== enterGen;
     matchesHydrated = false;
-    set({ room: null, members: [], matches: [], deck: [], deckIndex: 0, deckSourceCount: 0, loading: true });
+    set({ room: null, members: [], matches: [], deck: [], deckIndex: 0, deckSourceCount: 0, loading: true, matchesLoaded: false });
     try {
       const room = await fetchRoom(roomId);
       const [members, all, myVotes, blocked] = await Promise.all([
@@ -77,6 +88,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         fetchMyRoomVotes(roomId),
         fetchBlockedUserIds().catch(() => []),
       ]);
+      if (stale()) return;
       blockedIds = new Set(blocked);
       const voted = new Set(myVotes);
       set({
@@ -87,6 +99,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         loading: false,
       });
       await get().refreshMatches();
+      if (stale()) return;
 
       // live updates: any vote or membership change re-derives the matches.
       // RLS scopes postgres_changes, so only members receive these events.
@@ -107,6 +120,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
         )
         .subscribe();
     } catch (e) {
+      if (stale()) return;
       console.warn('[whim] enter room failed:', e);
       set({ loading: false });
       toast('Couldn’t open that room — try again.');
@@ -114,11 +128,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   },
 
   leave: () => {
+    enterGen++; // invalidate any enter() still in flight
     if (channel) {
       supabase.removeChannel(channel);
       channel = null;
     }
-    set({ room: null, members: [], matches: [], deck: [], deckIndex: 0, deckSourceCount: 0, loading: false });
+    set({ room: null, members: [], matches: [], deck: [], deckIndex: 0, deckSourceCount: 0, loading: false, matchesLoaded: false });
   },
 
   vote: (direction) => {
@@ -126,6 +141,9 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     const spot = deck[deckIndex];
     if (!room || !spot) return;
     set({ deckIndex: deckIndex + 1 }); // optimistic — deck never waits
+    if (deckIndex + 1 === deck.length) {
+      track('deck_finished', { mode: 'room', room_id: room.id, city: room.city, vibe: room.vibe, card_count: deck.length });
+    }
     castRoomVote(room.id, spot.id, direction === 'right').catch((e) => {
       console.warn('[whim] castRoomVote failed:', e);
       toast('Couldn’t send your vote — check your connection.');
@@ -133,11 +151,15 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   },
 
   refreshMatches: async () => {
-    const { room, matches: previous } = get();
+    const { room } = get();
     if (!room) return;
+    const gen = enterGen;
+    const request = ++matchesRequest;
     try {
       const raw = await fetchRoomMatches(room.id);
       const spots = await fetchSpotsByIds(raw.map((m) => m.spotId));
+      if (gen !== enterGen || request !== matchesRequest) return;
+      const previous = get().matches;
       const byId = new Map(spots.map((s) => [s.id, s]));
       const matches = raw
         .filter((m) => byId.has(m.spotId))
@@ -145,13 +167,14 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       // celebrate matches that are new since the last refresh (quiet on the
       // initial fetch after entering, loud for live arrivals — even the first)
       const known = new Set(previous.map((m) => m.spot.id));
-      const fresh = matches.find((m) => !known.has(m.spot.id));
-      if (fresh && matchesHydrated) {
+      const fresh = matches.filter((m) => !known.has(m.spot.id));
+      if (fresh.length && matchesHydrated) {
+        track('room_match', { room_id: room.id, city: room.city, vibe: room.vibe, new_match_count: fresh.length, match_count: matches.length });
         hapticSuccess();
-        toast(`It’s a match ✦ ${fresh.spot.title}`);
+        toast(`It’s a match ✦ ${fresh[0].spot.title}`);
       }
       matchesHydrated = true;
-      set({ matches });
+      set({ matches, matchesLoaded: true });
     } catch (e) {
       console.warn('[whim] refreshMatches failed:', e);
     }
@@ -161,7 +184,11 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     const { room } = get();
     if (!room) return;
     try {
-      set({ members: visible(await fetchRoomMembers(room.id)) });
+      const gen = enterGen;
+      const request = ++membersRequest;
+      const members = await fetchRoomMembers(room.id);
+      if (gen !== enterGen || request !== membersRequest) return;
+      set({ members: visible(members) });
     } catch (e) {
       console.warn('[whim] refreshMembers failed:', e);
     }
@@ -182,22 +209,41 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     // hide them immediately, then persist
     blockedIds.add(userId);
     set((s) => ({ members: visible(s.members) }));
-    blockUser(userId).catch((e) => {
-      console.warn('[whim] blockUser failed:', e);
-      toast('Couldn’t block — check your connection.');
-    });
-    toast('Blocked — you won’t see them again.');
+    blockUser(userId)
+      .then(() => toast('Blocked — you won’t see them again.'))
+      .catch((e) => {
+        console.warn('[whim] blockUser failed:', e);
+        toast('Hidden for now, but the block didn’t save — check your connection and try again.');
+      });
   },
 
   leaveCurrentRoom: async () => {
     const { room } = get();
-    if (!room) return;
+    if (!room) return false;
     try {
       await leaveRoom(room.id);
       get().leave();
+      return true;
     } catch (e) {
       console.warn('[whim] leaveRoom failed:', e);
       toast('Couldn’t leave the room — try again.');
+      return false;
     }
   },
 }));
+
+/**
+ * Make sure the room in the URL is loaded. The lobby normally enters the room
+ * before pushing the group deck or plan; opened any other way (shared link,
+ * notification, app restored on that screen) nothing was loaded and the plan
+ * rendered blank. Enters the room if needed, and leaves it again on the way
+ * out only when this screen was the one that entered.
+ */
+export function useEnsureRoom(roomId: string | undefined): void {
+  useEffect(() => {
+    const st = useRoomStore.getState();
+    if (!roomId || st.room?.id === roomId || st.loading) return;
+    st.enter(roomId);
+    return () => useRoomStore.getState().leave();
+  }, [roomId]);
+}

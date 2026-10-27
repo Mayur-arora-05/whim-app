@@ -1,6 +1,6 @@
-// Seed one official "Whim Editors'" 3-day itinerary per curated city from
+// Seed one official "BeWhim Editors'" 3-day itinerary per curated city from
 // that city's real curated spots. Run: node --env-file=.env.seed scripts/seed-trips.mjs
-// Seed one official "Whim Editors'" 3-day itinerary per curated city, built
+// Seed one official "BeWhim Editors'" 3-day itinerary per curated city, built
 // from that city's real curated spots so the map + Maps export work. Each city:
 // select a balanced ~12-spot highlight set, cluster into 3 geographic days,
 // order each day by nearest-neighbor, and publish.
@@ -111,7 +111,7 @@ function buildTrip(cityName, spots) {
   const cover = days[0]?.find((x) => x.photo)?.photo ?? chosen.find((x) => x.photo)?.photo ?? null;
   return {
     title: `3 perfect days in ${cityName}`,
-    note: `The Whim editors’ highlight route — three walkable days, one neighbourhood at a time.\n\n${noteLines.join('\n')}`,
+    note: `The BeWhim editors’ highlight route — three walkable days, one neighbourhood at a time.\n\n${noteLines.join('\n')}`,
     stop_spot_ids, stop_days, stop_count: stop_spot_ids.length, cover,
   };
 }
@@ -124,9 +124,9 @@ function buildTrip(cityName, spots) {
     if (!spots?.length) { console.log(`${city}: no spots, skip`); continue; }
     const trip = buildTrip(city, spots);
     // idempotent: replace any existing editors' pick for this city
-    await s.from('published_itineraries').delete().eq('author_name', 'Whim').eq('city', city);
+    await s.from('published_itineraries').delete().eq('author_name', 'BeWhim').eq('city', city);
     const { error } = await s.from('published_itineraries').insert({
-      author, author_name: 'Whim', title: trip.title, note: trip.note, city, vibe: null,
+      author, author_name: 'BeWhim', title: trip.title, note: trip.note, city, vibe: null,
       stop_spot_ids: trip.stop_spot_ids, stop_days: trip.stop_days, stop_count: trip.stop_count,
       cover: trip.cover, status: 'approved',
     });

@@ -39,6 +39,8 @@ interface WhimState {
   deck: Spot[];
   deckIndex: number;
   deckSourceCount: number; // spots available for this context, before filtering decided ones
+  deckLoaded: boolean;
+  deckFinished: boolean;
   deckLoading: boolean;
   passedIds: Record<string, string[]>; // per-collection swipe-away history (session only)
   history: { spotId: string; direction: SwipeDirection }[]; // this deck session, for Undo
@@ -68,6 +70,14 @@ interface WhimState {
   reset: () => void;
 }
 
+function finishedDeck(s: WhimState): boolean {
+  if (s.deckFinished || !s.deck.length || s.deckIndex + 1 < s.deck.length) return s.deckFinished;
+  track('deck_finished', { mode: 'solo', city: s.city, vibe: s.vibe, card_count: s.deck.length });
+  return true;
+}
+
+let deckGeneration = 0;
+
 export const useWhimStore = create<WhimState>()(
   persist(
     (set, get) => ({
@@ -76,6 +86,8 @@ export const useWhimStore = create<WhimState>()(
   deck: [],
   deckIndex: 0,
   deckSourceCount: 0,
+  deckLoaded: false,
+  deckFinished: false,
   deckLoading: false,
   passedIds: {},
   history: [],
@@ -87,7 +99,8 @@ export const useWhimStore = create<WhimState>()(
   notificationsSeen: false,
 
   setContext: async (city, vibe) => {
-    set({ city, vibe, deck: [], deckIndex: 0, history: [], deckLoading: true });
+    const generation = ++deckGeneration;
+    set({ city, vibe, deck: [], deckIndex: 0, history: [], deckLoaded: false, deckFinished: false, deckLoading: true });
     track('deck_started', { city, vibe });
     let all: Spot[] = [];
     try {
@@ -95,6 +108,7 @@ export const useWhimStore = create<WhimState>()(
     } catch (e) {
       console.warn('[whim] fetchDeck failed, using mock:', e);
     }
+    if (generation !== deckGeneration) return;
     // dev fallback only for Tokyo, so other cities correctly show "no spots"
     if (all.length === 0 && city === 'Tokyo') all = getMockDeck(city, vibe);
     // deck memory: skip spots already saved (in this collection) or passed
@@ -102,11 +116,19 @@ export const useWhimStore = create<WhimState>()(
     const saved = s.bucketList.filter((b) => b.city === city && b.vibe === vibe).map((b) => b.anchor.id);
     const decided = new Set<string>([...(s.passedIds[ctxKey(city, vibe)] ?? []), ...saved]);
     const deck = all.filter((sp) => !decided.has(sp.id));
-    set({ deck, deckSourceCount: all.length, deckLoading: false });
+    set({ deck, deckSourceCount: all.length, deckLoaded: true, deckLoading: false });
   },
 
-  setCity: (city) => set({ city }),
-  setVibe: (vibe) => set({ vibe }),
+  setCity: (city) => {
+    if (city === get().city) return;
+    deckGeneration++;
+    set({ city, deck: [], deckIndex: 0, deckSourceCount: 0, deckLoaded: false, deckFinished: false, deckLoading: false, history: [], pendingMatch: null });
+  },
+  setVibe: (vibe) => {
+    if (vibe === get().vibe) return;
+    deckGeneration++;
+    set({ vibe, deck: [], deckIndex: 0, deckSourceCount: 0, deckLoaded: false, deckFinished: false, deckLoading: false, history: [], pendingMatch: null });
+  },
   markNotificationsSeen: () => set({ notificationsSeen: true }),
 
   hydrate: async () => {
@@ -182,10 +204,11 @@ export const useWhimStore = create<WhimState>()(
   swipeLeft: () =>
     set((s) => {
       const spot = s.deck[s.deckIndex];
-      if (!spot) return { deckIndex: s.deckIndex + 1 };
+      if (!spot) return s;
       const key = ctxKey(s.city, s.vibe);
       return {
         deckIndex: s.deckIndex + 1,
+        deckFinished: finishedDeck(s),
         passedIds: { ...s.passedIds, [key]: [...(s.passedIds[key] ?? []), spot.id] },
         history: [...s.history, { spotId: spot.id, direction: 'left' }],
       };
@@ -197,6 +220,7 @@ export const useWhimStore = create<WhimState>()(
       if (!spot) return s;
       return {
         deckIndex: s.deckIndex + 1,
+        deckFinished: finishedDeck(s),
         pendingMatch: spot,
         history: [...s.history, { spotId: spot.id, direction: 'right' }],
       };
@@ -210,12 +234,12 @@ export const useWhimStore = create<WhimState>()(
     if (!spot) return;
     set((s) => ({
       deckIndex: s.deckIndex + 1,
+      deckFinished: finishedDeck(s),
       history: [...s.history, { spotId: spot.id, direction: 'right' }],
       bucketList: [...s.bucketList, { anchor: spot, microActivities: [], city, vibe }],
       notificationsSeen: false,
     }));
-    track('spot_saved', { via: 'super', city, vibe });
-    saveSpot(spot, [], city, vibe).catch((e) => {
+    saveSpot(spot, [], city, vibe, 'super').catch((e) => {
       console.warn('[whim] superSave failed:', e);
       toast('Couldn’t save that spot — check your connection.');
     });
@@ -284,6 +308,7 @@ export const useWhimStore = create<WhimState>()(
   // Delete the current city+vibe collection and forget swipe history, so the
   // deck deals fresh from the top next time.
   clearCollection: () => {
+    deckGeneration++;
     const { city, vibe } = get();
     set((s) => {
       // forget swipe history for THIS collection only — others keep theirs
@@ -294,6 +319,9 @@ export const useWhimStore = create<WhimState>()(
         deck: [],
         deckIndex: 0,
         deckSourceCount: 0,
+        deckLoaded: false,
+        deckFinished: false,
+        deckLoading: false,
       };
     });
     clearSavedSpots(city, vibe).catch((e) => {
@@ -302,8 +330,10 @@ export const useWhimStore = create<WhimState>()(
     });
   },
 
-  reset: () =>
-    set({ vibe: 'classics', deck: [], deckIndex: 0, deckSourceCount: 0, deckLoading: false, passedIds: {}, history: [], pendingMatch: null, bucketList: [], checkins: [], profile: null, hydrated: false, notificationsSeen: false }),
+  reset: () => {
+    deckGeneration++;
+    set({ vibe: 'classics', deck: [], deckIndex: 0, deckSourceCount: 0, deckLoaded: false, deckFinished: false, deckLoading: false, passedIds: {}, history: [], pendingMatch: null, bucketList: [], checkins: [], profile: null, hydrated: false, notificationsSeen: false });
+  },
     }),
     {
       name: 'whim-store',

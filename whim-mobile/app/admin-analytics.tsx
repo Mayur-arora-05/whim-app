@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
-import { fetchAdminAnalytics, type AdminAnalytics } from '@/lib/db';
+import { fetchAdminAnalytics, type AdminAnalytics as AdminAnalyticsData } from '@/lib/db';
 import { COLORS, SHADOWS, press } from '@/lib/theme';
 import BackButton from '@/components/BackButton';
 
@@ -16,11 +16,27 @@ const LABEL: Record<string, string> = {
   checkin: 'Check-ins',
   trip_published: 'Trips published',
   user_followed: 'Follows',
+  deck_finished: 'Decks finished',
+  route_viewed: 'Route views',
+  open_in_maps: 'Maps opened',
+  plan_share_requested: 'Plan share requests',
+  room_created: 'Rooms created',
+  room_joined: 'Room joins',
+  room_match: 'New matches seen',
+  room_invite_share_requested: 'Invite share requests',
+  room_invite_shared: 'Invites shared',
+  nearby_started: 'Nearby loads started',
+  nearby_loaded: 'Nearby lists loaded',
+  nearby_failed: 'Nearby loads failed',
+  nearby_enriched: 'Nearby tips loaded',
+  nearby_saved: 'Nearby places saved',
+  guide_saved: 'Guides saved on device',
+  guide_remix_started: 'Guide remixes started',
 };
 
 export default function AdminAnalytics() {
   const [days, setDays] = useState(30);
-  const [data, setData] = useState<AdminAnalytics | null>(null);
+  const [data, setData] = useState<AdminAnalyticsData | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'denied' | 'error'>('loading');
 
   const load = useCallback(() => {

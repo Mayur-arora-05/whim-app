@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="theme-color" content="#F0EEE8" />
-<title>Whim — Privacy Policy</title>
+<title>BeWhim — Privacy Policy</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=IBM+Plex+Mono&display=swap" rel="stylesheet" />
@@ -27,13 +27,13 @@
 </head>
 <body>
 <main>
-  <div class="eyebrow">Whim ✦ Field Notes</div>
+  <div class="eyebrow">BeWhim ✦ Field Notes</div>
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: July 2, 2026</p>
+  <p class="updated">Last updated: October 3, 2026</p>
 
-  <p>Whim is a travel-discovery app: you swipe curated places, save the ones you like,
+  <p>BeWhim is a travel-discovery app: you swipe curated places, save the ones you like,
   and turn them into a day plan — alone or with friends. This page explains exactly what
-  data Whim handles and why. The short version: we collect the minimum needed to make
+  data BeWhim handles and why. The short version: we collect the minimum needed to make
   the app work, we don't sell anything, and there are no ads or trackers.</p>
 
   <h2>What we collect</h2>
@@ -41,13 +41,24 @@
     <ul>
       <li><strong>Account:</strong> your email address, a password (stored as a secure hash
       by our auth provider — we never see it), and the display name you choose.</li>
-      <li><strong>Your activity in the app:</strong> spots you save, check-ins ("Passport"
+      <li><strong>Your activity in the app:</strong> spots and guides you save, check-ins ("Passport"
       stamps), and — in group rooms — the rooms you belong to and your votes on spots,
       which are visible to the other members of that room.</li>
-      <li><strong>Location (optional):</strong> only if you tap "Near me", and only to find
-      the closest city. Your location is used on-device for that lookup and is
-      <strong>never stored on our servers</strong>. You can decline the permission and use
-      everything else.</li>
+      <li><strong>Things you publish:</strong> trips you publish, places you submit, your
+      optional @handle, and who you follow. These are public to other BeWhim users, along
+      with your display name.</li>
+      <li><strong>Reports and blocks:</strong> if you report content or block someone, we
+      keep that record so we can review it and hide their content from you.</li>
+      <li><strong>Location (optional):</strong> only when you use "Near me" or check in.
+      For "Near me", your coordinates are sent to our server to find places around you;
+      we keep an anonymous ~1 km area result for an hour to speed up the next search, and
+      it is <strong>not linked to you</strong>. Check-in proximity is checked on your device.
+      You can decline the permission and use everything else.</li>
+      <li><strong>Usage and crash data:</strong> which features you use (for example "viewed
+      a route", "opened in Maps", "saved a guide") and error reports when the app crashes,
+      with your app version. These are linked to your account so we can understand how
+      BeWhim is used and fix bugs. They are never shared or sold.</li>
+      <li><strong>Notifications:</strong> if you allow them, a push token for your device.</li>
     </ul>
   </div>
 
@@ -55,16 +66,16 @@
   <ul>
     <li>No selling or renting your data. Ever.</li>
     <li>No advertising, no ad networks, no cross-app tracking.</li>
-    <li>No analytics that identify you personally.</li>
+    <li>No third-party analytics or tracking SDKs — usage data stays in our own database.</li>
     <li>No reading your contacts, photos, or anything else the app doesn't need.</li>
   </ul>
 
   <h2>Where your data lives</h2>
-  <p>Whim runs on <a href="https://supabase.com/privacy">Supabase</a> (database,
+  <p>BeWhim runs on <a href="https://supabase.com/privacy">Supabase</a> (database,
   authentication, and serverless functions). Your session token is stored on your device
-  in the iOS Keychain. Every database table is protected by row-level security, meaning
-  you can only ever read or write your own data (or a room's data if you're a member of
-  that room).</p>
+  in the iOS Keychain. Every database table is protected by row-level security: you can only read
+  or write your own private data (or a room's data if you're a member of that room), and
+  everyone can read only what has been published.</p>
 
   <h2>Third-party services</h2>
   <ul>
@@ -73,13 +84,21 @@
     Map tiles are requested from Mapbox when you view a map.</li>
     <li><strong>Google Routes</strong> — provides public-transit directions between the
     stops of your plan. Only the coordinates of the stops are sent, never your identity.</li>
+    <li><strong>Google Places</strong> — finds places for "Near me", search, and submitted
+    places, and serves place photos. Only place names or coordinates are sent, never your
+    identity.</li>
+    <li><strong>Anthropic</strong> — writes short place descriptions and tips. Only place
+    details are sent, never your identity.</li>
+    <li><strong>Expo push service</strong> — delivers notifications if you allow them.</li>
     <li><strong>Pexels</strong> — the source of spot photography.</li>
   </ul>
 
   <h2>Deleting your account</h2>
   <p>Settings → Danger zone → <strong>Delete account</strong>, right in the app. This
   permanently deletes your account and everything attached to it — saved spots,
-  check-ins, room memberships, and votes — immediately and irreversibly.</p>
+  check-ins, room memberships, votes, published trips and places, follows, and reports —
+  immediately and irreversibly. Usage and crash records are kept without your account
+  link, so they can no longer be connected to you.</p>
 
   <h2>Changes</h2>
   <p>If this policy changes in a way that matters, we'll note it in the app and update
@@ -88,7 +107,7 @@
   <h2>Contact</h2>
   <p>Questions or concerns: <a href="mailto:hello@bewhimsy.app">hello@bewhimsy.app</a></p>
 
-  <footer>planned with Whim ✦ swipe. save. go.</footer>
+  <footer>planned with BeWhim ✦ swipe. save. go.</footer>
 </main>
 </body>
 </html>

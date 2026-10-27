@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -24,6 +24,16 @@ export default function SwipeScreen() {
   const undoLast = useWhimStore((s) => s.undoLast);
   const canUndo = useWhimStore((s) => s.history.length > 0 && s.deckIndex > 0);
   const bucketList = useWhimStore((s) => s.bucketList);
+  const setContext = useWhimStore((s) => s.setContext);
+
+  // Normally Discover deals the deck before pushing here. Opened any other way
+  // (notification, link) nothing is loaded yet, and the empty deck would claim
+  // "we haven't curated this vibe" — so deal it for the current context once.
+  useEffect(() => {
+    const st = useWhimStore.getState();
+    if (!st.deckLoaded && !st.deckLoading) setContext(st.city, st.vibe);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // count only what's saved in this city + vibe collection
   const matchCount = useMemo(() => scopedBucket(bucketList, city, vibe).length, [bucketList, city, vibe]);
 

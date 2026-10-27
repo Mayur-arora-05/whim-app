@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import { APP_VERSION } from '@/lib/buildInfo';
 import { useAuth } from '@/lib/auth';
 import { fetchViewer } from '@/lib/db';
 import { supabase } from '@/lib/supabase';
 import { useWhimStore } from '@/store/useWhimStore';
 import BackButton from '@/components/BackButton';
+
 
 function Row({
   label,
@@ -23,10 +25,19 @@ function Row({
     <Pressable
       onPress={onPress}
       disabled={!onPress}
-      className="flex-row items-center justify-between border-b border-hairline px-4 py-4"
+      className="flex-row items-center justify-between gap-4 border-b border-hairline px-4 py-4"
     >
-      <Text className={`text-[15px] font-medium ${destructive ? 'text-destructive' : 'text-ink'}`}>{label}</Text>
-      {value ? <Text className="text-[14px] text-muted">{value}</Text> : onPress ? <Text className="text-muted">›</Text> : null}
+      <Text className={`shrink-0 text-[15px] font-medium ${destructive ? 'text-destructive' : 'text-ink'}`}>{label}</Text>
+      {/* value takes the leftover width and truncates in the middle, so a long
+          email at large text sizes reads "name…@gmail.com" instead of running
+          into the label and off the screen */}
+      {value ? (
+        <Text numberOfLines={1} ellipsizeMode="middle" className="flex-1 text-right text-[14px] text-muted">
+          {value}
+        </Text>
+      ) : onPress ? (
+        <Text className="text-muted">›</Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -123,7 +134,7 @@ export default function Settings() {
         <Section title="About">
           <Row label="Photos via Pexels" onPress={() => Linking.openURL('https://www.pexels.com')} />
           <Row label="Maps © Mapbox / OpenStreetMap" onPress={() => Linking.openURL('https://www.mapbox.com/about/maps/')} />
-          <Row label="Version" value="1.0.0" />
+          <Row label="Version" value={APP_VERSION} />
         </Section>
 
         <Section title="Danger zone">

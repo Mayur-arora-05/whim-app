@@ -9,6 +9,7 @@ import { COLORS, SHADOWS, press } from '@/lib/theme';
 import BackButton from '@/components/BackButton';
 import SpotImage from '@/components/SpotImage';
 import Icon from '@/components/Icon';
+import { track } from '@/lib/analytics';
 
 const memberInitials = (name: string | null) => {
   const n = (name ?? '').trim();
@@ -70,19 +71,22 @@ export default function RoomLobby() {
         text: 'Leave',
         style: 'destructive',
         onPress: async () => {
-          await leaveCurrentRoom();
-          router.back();
+          // stay in the lobby if it didn't work — the toast explains
+          if (await leaveCurrentRoom()) router.back();
         },
       },
     ]);
 
   const shareInvite = () => {
     if (!room) return;
+    track('room_invite_share_requested', { room_id: room.id });
     Share.share({
       message:
         `Help me plan our ${room.city} day on BeWhim ✦ swipe with me!\n` +
         `Room code: ${room.code}\n` +
         `Open: whim://room/join?code=${room.code}`,
+    }).then((result) => {
+      if (result.action === Share.sharedAction) track('room_invite_shared', { room_id: room.id });
     }).catch(() => {});
   };
 
@@ -189,7 +193,7 @@ export default function RoomLobby() {
           {matches.map((m) => (
             <View key={m.spot.id} className="mb-3 flex-row items-center gap-3.5 rounded-[20px] bg-white p-3.5" style={SHADOWS.soft}>
               <View className="h-[56px] w-[56px] overflow-hidden rounded-[14px]" style={{ backgroundColor: m.spot.tone }}>
-                <SpotImage uri={m.spot.photo} width={130} />
+                <SpotImage uri={m.spot.photo} placeId={m.spot.placeId} width={130} />
               </View>
               <View className="flex-1">
                 <Text className="font-serif text-[17px] text-ink">{m.spot.title}</Text>

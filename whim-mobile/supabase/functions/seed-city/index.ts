@@ -7,6 +7,10 @@
 // Gated by the service-role key in `x-seed-secret` (deploy with --no-verify-jwt).
 // Invoke per city; idempotent (upsert by place_id).
 //
+// Top-up mode ({ onlyNew: true, vibes: [...] }): adds places that aren't in the
+// catalogue yet (by place_id, any city) for just those vibes, and never touches
+// existing rows — a plain re-seed would overwrite them and reset their `nearby`.
+//
 // Secrets: GOOGLE_PLACES_API_KEY, ANTHROPIC_API_KEY
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -19,6 +23,15 @@ const VIBE_QUERIES: Record<Vibe, string> = {
   matcha: 'beloved specialty-coffee shops, patisseries, cozy bookshops and design boutiques',
   nature: 'best parks, gardens, viewpoints, waterfronts and scenic outdoor spots',
   nightlife: 'top cocktail bars, wine bars, historic pubs and iconic nightlife',
+};
+
+// Second phrasing per vibe, used in top-up mode to widen the candidate pool
+// once the obvious top-20 are already in the deck.
+const VIBE_QUERIES_ALT: Record<Vibe, string> = {
+  classics: 'historic old town squares, churches, palaces and notable museums',
+  matcha: 'independent cafes, tea rooms, bakeries, concept stores and bookshops',
+  nature: 'parks, botanical gardens, lakes, rivers, hills and scenic lookouts',
+  nightlife: 'craft beer bars, speakeasies, live music bars and wine bars',
 };
 
 const PALETTE = ['#2740E0', '#0E7C86', '#B5521E', '#1F5C3D', '#B23A6B', '#4A335E', '#B07A17', '#2B3A67'];
@@ -35,12 +48,12 @@ function distMeters(aLat: number, aLng: number, bLat: number, bLng: number): num
 }
 const popularity = (p: any) => (p.rating ?? 0) * Math.log10((p.userRatingCount ?? 0) + 10);
 
-async function searchVibe(vibe: Vibe, lat: number, lng: number, radius: number, key: string): Promise<any[]> {
+async function searchVibe(vibe: Vibe, lat: number, lng: number, radius: number, key: string, query = VIBE_QUERIES[vibe]): Promise<any[]> {
   try {
     const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': FIELD_MASK },
-      body: JSON.stringify({ textQuery: `${VIBE_QUERIES[vibe]}`, maxResultCount: 20, locationBias: { circle: { center: { latitude: lat, longitude: lng }, radius } } }),
+      body: JSON.stringify({ textQuery: query, maxResultCount: 20, locationBias: { circle: { center: { latitude: lat, longitude: lng }, radius } } }),
     });
     if (!res.ok) return [];
     return ((await res.json()).places ?? []).map((p: any) => ({ ...p, _hint: vibe }));
@@ -115,19 +128,35 @@ Deno.serve(async (req) => {
   if (req.headers.get('x-seed-secret') !== Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
     return new Response('forbidden', { status: 403 });
 
-  const { city, lat, lng, perVibe = 12, radius = 11000, minRatings = 60, noLLM = false } = await req.json();
+  const { city, lat, lng, perVibe = 12, radius = 11000, minRatings = 60, noLLM = false, onlyNew = false, vibes: only } = await req.json();
   if (!city || !Number.isFinite(lat) || !Number.isFinite(lng)) return new Response('city, lat, lng required', { status: 400 });
+  const wanted: Vibe[] = Array.isArray(only) && only.length ? VIBES.filter((v) => only.includes(v)) : VIBES;
 
   const key = Deno.env.get('GOOGLE_PLACES_API_KEY')!;
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')!;
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
   // 1. candidates
-  const found = (await Promise.all(VIBES.map((v) => searchVibe(v, lat, lng, radius, key)))).flat();
+  const searches = wanted.map((v) => searchVibe(v, lat, lng, radius, key));
+  if (onlyNew) searches.push(...wanted.map((v) => searchVibe(v, lat, lng, radius, key, VIBE_QUERIES_ALT[v])));
+  const found = (await Promise.all(searches)).flat();
+  // top-up: skip anything already in the catalogue (by place_id or same title in this city)
+  const known = new Set<string>();
+  const knownTitles = new Set<string>();
+  if (onlyNew) {
+    const ids = [...new Set(found.map((p) => p.id).filter(Boolean))];
+    for (let i = 0; i < ids.length; i += 60) {
+      const { data: hits } = await admin.from('spots').select('place_id').in('place_id', ids.slice(i, i + 60));
+      for (const h of hits ?? []) known.add(h.place_id);
+    }
+    const { data: same } = await admin.from('spots').select('title').eq('city', city);
+    for (const t of same ?? []) knownTitles.add(String(t.title).toLowerCase().trim());
+  }
   const seen = new Set<string>();
   const cands: any[] = [];
   for (const p of found) {
-    if (!p.id || seen.has(p.id)) continue;
+    if (!p.id || seen.has(p.id) || known.has(p.id)) continue;
+    if (knownTitles.has(String(p.displayName?.text ?? '').toLowerCase().trim())) continue;
     if ((p.userRatingCount ?? 0) < minRatings) continue;
     if (p.location && distMeters(lat, lng, p.location.latitude, p.location.longitude) > radius * 1.4) continue;
     seen.add(p.id); cands.push(p);
@@ -163,7 +192,7 @@ Deno.serve(async (req) => {
   }
   let tone = 0;
   const rows: any[] = [];
-  for (const v of VIBES) {
+  for (const v of wanted) {
     byVibe[v].sort((a, b) => b.rank - a.rank);
     for (const { p, e } of byVibe[v].slice(0, perVibe)) {
       const kind = (e?.kind || (p.primaryType ?? 'place').replace(/_/g, ' ')).trim();
@@ -192,6 +221,6 @@ Deno.serve(async (req) => {
   const { error } = await admin.from('spots').upsert(rows, { onConflict: 'id' });
   if (error) return new Response(JSON.stringify({ city, error: error.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
 
-  const counts = Object.fromEntries(VIBES.map((v) => [v, rows.filter((r) => r.vibes[0] === v).length]));
+  const counts = Object.fromEntries(wanted.map((v) => [v, rows.filter((r) => r.vibes[0] === v).length]));
   return new Response(JSON.stringify({ city, inserted: rows.length, counts, candidates: cands.length, mode: llm ? 'llm' : 'fallback', enrichErr: enrichErr.slice(0, 1) }), { headers: { 'Content-Type': 'application/json' } });
 });

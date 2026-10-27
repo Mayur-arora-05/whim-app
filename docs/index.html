@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
 <meta name="theme-color" content="#F0EEE8" />
-<title>Whim — email confirmed</title>
+<title>BeWhim — email confirmed</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=IBM+Plex+Mono&display=swap" rel="stylesheet" />
 <style>
-  /* Whim "Field Notes" tokens — keep in sync with whim-mobile/tailwind.config.js */
+  /* BeWhim "Field Notes" tokens — keep in sync with whim-mobile/tailwind.config.js */
   :root {
     --canvas: #F0EEE8;
     --ink: #17150F;
@@ -79,10 +79,10 @@
 </head>
 <body>
 <main>
-  <div class="stamp" id="stamp">Whim &#10022; Confirmed</div>
+  <div class="stamp" id="stamp">BeWhim &#10022; Confirmed</div>
   <h1 id="headline">Email confirmed.</h1>
-  <p class="sub" id="sub">Your account is ready. Open Whim on your phone and sign in.</p>
-  <a class="open-app" href="whim://" id="cta">Open Whim</a>
+  <p class="sub" id="sub">Your account is ready. Open BeWhim on your phone and sign in.</p>
+  <a class="open-app" href="whim://" id="cta">Open BeWhim</a>
   <p class="desktop-note" id="note">Reading this on a computer? Just open the app on your phone.</p>
 </main>
 <script>
@@ -94,13 +94,13 @@
   var el = function (id) { return document.getElementById(id); };
 
   if (params.get('error_description') || params.get('error')) {
-    el('stamp').innerHTML = 'Whim &#10022; Expired';
+    el('stamp').innerHTML = 'BeWhim &#10022; Expired';
     el('headline').textContent = 'This link has expired.';
-    el('sub').textContent = 'No worries — open Whim and request a fresh one.';
+    el('sub').textContent = 'No worries — open BeWhim and request a fresh one.';
   } else if (params.get('type') === 'recovery') {
-    el('stamp').innerHTML = 'Whim &#10022; Verified';
+    el('stamp').innerHTML = 'BeWhim &#10022; Verified';
     el('headline').textContent = 'Reset link verified.';
-    el('sub').textContent = 'Head back to Whim to choose a new password.';
+    el('sub').textContent = 'Head back to BeWhim to choose a new password.';
   }
   // default copy covers signup + email change confirmations
 </script>

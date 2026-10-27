@@ -50,7 +50,14 @@ export default function MySpots() {
       </View>
 
       {/* vibe filter */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-4 max-h-12" contentContainerStyle={{ paddingHorizontal: 20, gap: 10 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        // never let the list below squeeze this row (ScrollViews shrink by default,
+        // which sliced the bottoms off the pills); pad so the selected shadow fits
+        className="mt-3 shrink-0 grow-0"
+        contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 6, gap: 10 }}
+      >
         {(['all', ...VIBES.map((v) => v.id)] as (VibeId | 'all')[]).map((id) => {
           const on = id === filter;
           const n = id === 'all' ? spots.length : count(id);
